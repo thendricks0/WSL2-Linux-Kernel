@@ -1,0 +1,246 @@
+name: Build WSL2 Kernel
+
+on:
+  push:
+    branches:
+      - ci
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *" # Every day at 01:00 am UTC
+
+env:
+  KERNEL_CONFIG: Microsoft/config-wsl
+  CUSTOM_KERNEL_CONFIG: |
+    # Custom kernel configuration options
+    CONFIG_LOCALVERSION="-microsoft-custom-WSL2"
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      branches: ${{ steps.branches.outputs.branches }}
+
+    steps:
+      - name: Gather available branches from microsoft/WSL2-Linux-Kernel
+        id: branches
+        run: |
+          git init
+          git remote add origin https://github.com/microsoft/WSL2-Linux-Kernel.git
+
+          # Get remote braches that start with "linux-msft-wsl-"
+          branches=$(git ls-remote --heads origin | grep -o 'refs/heads/linux-msft-wsl-[0-9]*\.[0-9]*\.[0-9]*.*' | sed 's|refs/heads/||')
+          json=$(echo "$branches" | jq -R . | jq -s .)
+          echo "==> Available branches: $json"
+
+          # Filter old kernels we don't need 4.19, 5.4, 5.10
+          branches=$(echo "$branches" | grep -vE '^(linux-msft-wsl-(4\.19|5\.4|5\.10)\.)')
+          branches=$(echo "$branches" | sort -V)
+
+          # Convert to JSON array
+          json=$(echo "$branches" | jq -R . | jq -cs .)
+          echo "==> Selected branches: $(echo $json | jq)"
+
+          echo "branches=$json" >> $GITHUB_OUTPUT
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        branch: ${{ fromJson(needs.prepare.outputs.branches) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/WSL2-Linux-Kernel
+          ref: ${{ matrix.branch }}
+          fetch-depth: 1
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache
+
+      - name: Setup ccache
+        run: |
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+          ccache --set-config=cache_dir=$PWD/.cache/ccache
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=stats=true
+          ccache --set-config=log_file=$PWD/.cache/ccache.log
+          ccache --zero-stats
+          echo "==> Initial ccache stats:"
+          ccache --show-stats --verbose
+
+      - name: Verify kernel configuration exists
+        run: |
+          if [ ! -f "$KERNEL_CONFIG" ]; then
+            echo "Error: Kernel config file $KERNEL_CONFIG not found"
+            exit 1
+          fi
+          echo "==> Using kernel config: $KERNEL_CONFIG"
+          echo "==> Custom kernel config: $CUSTOM_KERNEL_CONFIG"
+          echo "$CUSTOM_KERNEL_CONFIG" >> $KERNEL_CONFIG
+          echo "==> Kernel config after modification:"
+          cat $KERNEL_CONFIG
+
+      - name: Build kernel
+        id: build-kernel
+        run: |
+          time_start=$(date +%s)
+          echo "==> Starting kernel build with $(nproc) parallel jobs"
+
+          # Build kernel with parallel jobs and ccache
+          make KCONFIG_CONFIG=$KERNEL_CONFIG -j$(nproc)
+
+          # Install modules to local directory
+          make KCONFIG_CONFIG=$KERNEL_CONFIG INSTALL_MOD_PATH="$PWD/modules" modules_install
+          time_end=$(date +%s)
+          time_taken=$((time_end - time_start))
+          echo "==> Kernel build completed in $((time_taken / 60)) minutes and $((time_taken % 60)) seconds"
+          echo "time_summary=$((time_taken / 60)) min $((time_taken % 60)) sec" >> $GITHUB_OUTPUT
+
+      - name: Get kernel release version
+        id: kernel-version
+        run: |
+          KERNEL_RELEASE=$(make -s kernelrelease)
+          # Strip -microsoft-standard-* from the version
+          STRIPPED_VERSION=$(echo "$KERNEL_RELEASE" | sed 's/-microsoft-.*//')
+
+          echo "release=$KERNEL_RELEASE" >> $GITHUB_OUTPUT
+          echo "version=$STRIPPED_VERSION" >> $GITHUB_OUTPUT
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "ref=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
+          echo "==> Kernel version: $KERNEL_RELEASE"
+
+      - name: Create modules VHDX
+        run: |
+          MODULE_DIR="$PWD/modules/lib/modules/${{ steps.kernel-version.outputs.release }}"
+          # Check if we have any .ko files
+          if ! find "$MODULE_DIR" -name "*.ko" | grep -q .; then
+            echo "==> No kernel modules found - skipping VHDX creation"
+            exit 0
+          fi
+
+          # Calculate modules size (+ 256MiB for slack)
+          modules_size=$(du -bs "$PWD/modules" | awk '{print $1;}')
+          modules_size=$((modules_size + (256*(1<<20))))
+
+          # Create temporary directory
+          tmp_dir=$(mktemp -d)
+
+          echo "==> Creating blank image of size $modules_size bytes"
+          dd if=/dev/zero of="$tmp_dir/modules.img" bs=1024 count=$((modules_size / 1024))
+
+          echo "==> Setting up loopback device and filesystem"
+          lo_dev=$(sudo losetup --find --show "$tmp_dir/modules.img")
+          sudo mkfs -t ext4 "$lo_dev"
+
+          echo "==> Mounting and copying modules"
+          sudo mkdir -p "$tmp_dir/modules_img"
+          sudo mount "$lo_dev" "$tmp_dir/modules_img"
+          sudo chmod a+rw "$tmp_dir/modules_img"
+
+          # Copy modules
+          sudo cp -rv "$MODULE_DIR"/* "$tmp_dir/modules_img/"
+
+          echo "==> Unmounting and converting to VHDX"
+          sudo umount "$tmp_dir/modules_img"
+          sudo losetup -d "$lo_dev"
+
+          # Convert to VHDX
+          sudo qemu-img convert -O vhdx "$tmp_dir/modules.img" modules.vhdx
+          sudo chmod 644 modules.vhdx
+
+          # Cleanup
+          rm -rf "$tmp_dir"
+
+      - name: Prepare artifacts
+        run: |
+          # Create artifacts directory
+          mkdir -p artifacts
+
+          # Copy built kernel
+          cp -v arch/x86/boot/bzImage artifacts/bzImage-${{ steps.kernel-version.outputs.version }}
+
+          if [ -f modules.vhdx ]; then
+            # Copy modules VHDX
+            cp -v modules.vhdx artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx
+          fi
+
+          # Copy kernel config
+          cp -v $KERNEL_CONFIG artifacts/config-${{ steps.kernel-version.outputs.release }}
+
+          # Create build info
+          cat > artifacts/build-info.txt << EOF
+          Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          Kernel Version: ${{ steps.kernel-version.outputs.release }}
+          Git Commit: ${{ steps.kernel-version.outputs.sha }}
+          Git Ref: ${{ steps.kernel-version.outputs.ref }}
+          Workflow Run: ${{ github.run_number }}
+          Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          System Info:
+          CPU: $(nproc) cores
+          $(lscpu | grep "Model name")
+          Memory: $(free -h | grep Mem)
+
+          ccache Stats:
+          $(ccache --show-stats --verbose)
+
+          ccache Debug Log (last 20 lines):
+          $(tail -n 20 .cache/ccache.log 2>/dev/null || echo "No debug log available")
+          EOF
+
+          # List artifacts
+          ls -la artifacts/
+
+      - name: Upload kernel artifacts
+        id: upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl2-kernel-${{ steps.kernel-version.outputs.release }}_${{ github.run_number }}
+          path: artifacts/
+          retention-days: 2
+          compression-level: 1
+
+      - name: Build summary
+        run: |
+          echo "## Build Summary ${{ steps.kernel-version.outputs.release }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kernel Version**: ${{ steps.kernel-version.outputs.release }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ steps.kernel-version.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ steps.kernel-version.outputs.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifacts**: Available for 2 days" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Performance" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ccache --show-stats >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "Build time: ${{ steps.build-kernel.outputs.time_summary }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Created" >> $GITHUB_STEP_SUMMARY
+          echo "- \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image" >> $GITHUB_STEP_SUMMARY
+          if [ -f "artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx" ]; then
+            echo "- \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used" >> $GITHUB_STEP_SUMMARY
+          echo "- \`build-info.txt\`: Build metadata" >> $GITHUB_STEP_SUMMARY
+          echo "## Installation command" >> $GITHUB_STEP_SUMMARY
+          echo '```powershell' >> $GITHUB_STEP_SUMMARY
+          echo 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('"'https://raw.githubusercontent.com/thendricks0/WSL2-Linux-Kernel/ci/Install-WSL2Kernel.ps1'"'))' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
