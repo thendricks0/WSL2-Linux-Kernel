@@ -54,14 +54,14 @@ if ($EnableDebug) {
 
 # Script configuration
 $script:Config = @{
-    GitHubOwner = "thendricks0"
-    GitHubRepo = "WSL2-Linux-Kernel"
-    UserHome = $env:USERPROFILE
+    GitHubOwner   = "thendricks0"
+    GitHubRepo    = "WSL2-Linux-Kernel"
+    UserHome      = $env:USERPROFILE
     WSLKernelsDir = Join-Path $env:USERPROFILE "wsl\kernels"
     WSLConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
 }
 
-Write-Host "🔧 WSL2 Kernel Installer" -ForegroundColor Cyan
+Write-Host "WSL2 Kernel Installer" -ForegroundColor Cyan
 Write-Host "========================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -115,7 +115,7 @@ function Get-LatestSuccessfulWorkflow {
         
         # Build headers
         $headers = @{
-            'Accept' = 'application/vnd.github+json'
+            'Accept'               = 'application/vnd.github+json'
             'X-GitHub-Api-Version' = '2022-11-28'
         }
         
@@ -154,9 +154,9 @@ function Get-LatestSuccessfulWorkflow {
         foreach ($workflow in $targetWorkflows) {
             Write-Verbose "Checking runs for workflow: $($workflow.name)"
             
-            $runsUrl = "https://api.github.com/repos/$Owner/$Repository/actions/workflows/$($workflow.id)/runs?status=completed&conclusion=success&per_page=1"
+            # Escape ampersands for PowerShell 5.1 compatibility
+            $runsUrl = "https://api.github.com/repos/$Owner/$Repository/actions/workflows/$($workflow.id)/runs?status=completed`&conclusion=success`&per_page=1"
             Write-Verbose "Requesting runs: $runsUrl"
-            
             $runsResponse = Invoke-RestMethod -Uri $runsUrl -Method Get -Headers $headers -ErrorAction Stop
         
             
@@ -234,7 +234,7 @@ function Get-WorkflowArtifacts {
         
         # Build headers
         $headers = @{
-            'Accept' = 'application/vnd.github+json'
+            'Accept'               = 'application/vnd.github+json'
             'X-GitHub-Api-Version' = '2022-11-28'
         }
         
@@ -257,7 +257,9 @@ function Get-WorkflowArtifacts {
         Write-Verbose "Found $($response.artifacts.Count) artifact(s)"
         
         foreach ($artifact in $response.artifacts) {
-            Write-Verbose "  - $($artifact.name) ($([Math]::Round($artifact.size_in_bytes / 1MB, 2)) MB)"
+            # Use (1024*1024) instead of 1MB for compatibility
+            $sizeMB = [Math]::Round($artifact.size_in_bytes / (1024 * 1024), 2)
+            Write-Verbose ("  - {0} ({1}) MB" -f $artifact.name, $sizeMB)
         }
         
         return $response.artifacts
@@ -313,9 +315,8 @@ function Show-ArtifactMenu {
     # Display menu items
     for ($i = 0; $i -lt $Artifacts.Count; $i++) {
         $artifact = $Artifacts[$i]
-        $sizeMB = [Math]::Round($artifact.size_in_bytes / 1MB, 2)
+        $sizeMB = [Math]::Round($artifact.size_in_bytes / (1024 * 1024), 2)
         $createdDate = ([DateTime]::Parse($artifact.created_at)).ToString("yyyy-MM-dd HH:mm")
-        
         Write-Host "$($i + 1). " -NoNewline -ForegroundColor Yellow
         Write-Host "$($artifact.name)" -ForegroundColor White
         Write-Host "    Size: $sizeMB MB" -ForegroundColor Gray
@@ -436,7 +437,7 @@ function Download-Artifact {
         
         # Build headers
         $headers = @{
-            'Accept' = 'application/vnd.github+json'
+            'Accept'               = 'application/vnd.github+json'
             'X-GitHub-Api-Version' = '2022-11-28'
         }
         
@@ -449,7 +450,8 @@ function Download-Artifact {
         $zipFilePath = Join-Path $DestinationPath $zipFileName
         
         Write-Host "Downloading artifact: $($Artifact.name)" -ForegroundColor Cyan
-        Write-Host "Size: $([Math]::Round($Artifact.size_in_bytes / 1MB, 2)) MB" -ForegroundColor Gray
+        $sizeMB = [Math]::Round($Artifact.size_in_bytes / (1024 * 1024), 2)
+        Write-Host "Size: $sizeMB MB" -ForegroundColor Gray
         Write-Host "Destination: $zipFilePath" -ForegroundColor Gray
         
         # Determine download URL based on authentication
@@ -458,7 +460,8 @@ function Download-Artifact {
             $downloadUrl = $Artifact.archive_download_url
             Write-Verbose "Using GitHub API (authenticated): $downloadUrl"
             Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $zipFilePath -ErrorAction Stop
-        } else {
+        }
+        else {
             # Use nightly.link for public access (no authentication required)
             # Get the workflow run ID from the artifact object
             if (-not $Artifact.workflow_run -or -not $Artifact.workflow_run.id) {
@@ -478,7 +481,7 @@ function Download-Artifact {
             Invoke-WebRequest -Uri $nightlyUrl -OutFile $zipFilePath -ErrorAction Stop
         }
         
-        Write-Host "✓ Download completed!" -ForegroundColor Green
+        Write-Host "Download completed!" -ForegroundColor Green
         
         if ($Extract) {
             Write-Host "Extracting archive..." -ForegroundColor Cyan
@@ -498,7 +501,7 @@ function Download-Artifact {
             Remove-Item $zipFilePath -Force
             Write-Verbose "Removed ZIP file: $zipFilePath"
             
-            Write-Host "✓ Extraction completed!" -ForegroundColor Green
+            Write-Host "Extraction completed!" -ForegroundColor Green
             return $extractPath
         }
         
@@ -671,17 +674,19 @@ function Initialize-WSLDirectories {
     Creates the WSL kernels directory structure
     #>
     try {
-        Write-Host "`n📁 Initializing WSL directories..." -ForegroundColor Yellow
+        Write-Host "`nInitializing WSL directories..." -ForegroundColor Yellow
         
         if (-not (Test-Path $script:Config.WSLKernelsDir)) {
             New-Item -ItemType Directory -Path $script:Config.WSLKernelsDir -Force | Out-Null
-            Write-Host "✓ Created directory: $($script:Config.WSLKernelsDir)" -ForegroundColor Green
-        } else {
-            Write-Host "✓ Directory exists: $($script:Config.WSLKernelsDir)" -ForegroundColor Green
+            Write-Host "Created directory: $($script:Config.WSLKernelsDir)" -ForegroundColor Green
+        }
+        else {
+            Write-Host "Directory exists: $($script:Config.WSLKernelsDir)" -ForegroundColor Green
         }
         
         return $true
-    } catch {
+    }
+    catch {
         Write-Error "❌ Failed to initialize directories: $($_.Exception.Message)"
         return $false
     }
@@ -693,7 +698,7 @@ function Get-LatestKernelArtifacts {
     Gets the latest kernel artifacts from GitHub
     #>
     try {
-        Write-Host "`n🔍 Querying GitHub for latest WSL2 kernels..." -ForegroundColor Yellow
+        Write-Host "`nQuerying GitHub for latest WSL2 kernels..." -ForegroundColor Yellow
         
         # Get latest successful workflow
         Write-Verbose "Getting latest successful workflow..."
@@ -703,7 +708,7 @@ function Get-LatestKernelArtifacts {
             throw "No successful workflow runs found"
         }
         
-        Write-Host "✓ Found workflow: $($workflow.name)" -ForegroundColor Green
+        Write-Host "Found workflow: $($workflow.name)" -ForegroundColor Green
         Write-Host "  Run ID: $($workflow.id)" -ForegroundColor Gray
         Write-Host "  Created: $($workflow.created_at)" -ForegroundColor Gray
         
@@ -715,10 +720,11 @@ function Get-LatestKernelArtifacts {
             throw "No artifacts found for the latest workflow"
         }
         
-        Write-Host "✓ Found $($artifacts.Count) kernel artifact(s)" -ForegroundColor Green
+        Write-Host "Found $($artifacts.Count) kernel artifact(s)" -ForegroundColor Green
         
         return $artifacts
-    } catch {
+    }
+    catch {
         Write-Error "❌ Failed to get kernel artifacts: $($_.Exception.Message)"
         return $null
     }
@@ -735,7 +741,7 @@ function Install-SelectedKernel {
     )
     
     try {
-        Write-Host "`n💾 Installing kernel: $($Artifact.name)" -ForegroundColor Yellow
+        Write-Host "`nInstalling kernel: $($Artifact.name)" -ForegroundColor Yellow
         
         # Create temporary download directory
         $tempBase = if ($env:TEMP) { $env:TEMP }
@@ -751,7 +757,7 @@ function Install-SelectedKernel {
             throw "Failed to download or extract kernel artifact"
         }
         
-        Write-Host "✓ Kernel downloaded and extracted" -ForegroundColor Green
+        Write-Host "Kernel downloaded and extracted" -ForegroundColor Green
         
         # Analyze extracted contents
         $kernelFiles = Get-ChildItem $extractedPath -File
@@ -765,9 +771,9 @@ function Install-SelectedKernel {
             throw "No kernel file (bzImage-*) found in artifact"
         }
         
-        Write-Host "✓ Found kernel: $($kernelFile.Name)" -ForegroundColor Green
+        Write-Host "Found kernel: $($kernelFile.Name)" -ForegroundColor Green
         if ($modulesFile) {
-            Write-Host "✓ Found modules: $($modulesFile.Name)" -ForegroundColor Green
+            Write-Host "Found modules: $($modulesFile.Name)" -ForegroundColor Green
         }
         
         # Create version-specific directory in kernels folder
@@ -781,11 +787,11 @@ function Install-SelectedKernel {
         
         # Copy kernel files to installation directory
         Copy-Item $kernelFile.FullName $kernelInstallDir -Force
-        Write-Host "✓ Installed kernel: $($kernelFile.Name)" -ForegroundColor Green
+        Write-Host "Installed kernel: $($kernelFile.Name)" -ForegroundColor Green
         
         if ($modulesFile) {
             Copy-Item $modulesFile.FullName $kernelInstallDir -Force
-            Write-Host "✓ Installed modules: $($modulesFile.Name)" -ForegroundColor Green
+            Write-Host "Installed modules: $($modulesFile.Name)" -ForegroundColor Green
         }
         
         # Clean up temporary directory
@@ -793,12 +799,13 @@ function Install-SelectedKernel {
         Remove-Item $tempDir -Recurse -Force
         
         return @{
-            Version = $kernelVersion
-            KernelPath = Join-Path $kernelInstallDir $kernelFile.Name
-            ModulesPath = if ($modulesFile) { Join-Path $kernelInstallDir $modulesFile.Name } else { $null }
-            InstallDir = $kernelInstallDir
+            Version     = $kernelVersion
+            KernelPath  = Join-Path $kernelInstallDir $kernelFile.Name
+            KernelModules = if ($modulesFile) { Join-Path $kernelInstallDir $modulesFile.Name } else { $null }
+            InstallDir  = $kernelInstallDir
         }
-    } catch {
+    }
+    catch {
         Write-Error "❌ Failed to install kernel: $($_.Exception.Message)"
         
         # Clean up on failure
@@ -821,19 +828,20 @@ function Update-WSLConfiguration {
     )
     
     try {
-        Write-Host "`n⚙️ Updating WSL configuration..." -ForegroundColor Yellow
+        Write-Host "`nUpdating WSL configuration..." -ForegroundColor Yellow
         
         # Backup existing config if it exists
         if (Test-Path $script:Config.WSLConfigPath) {
             $backupPath = "$($script:Config.WSLConfigPath).backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
             Copy-Item $script:Config.WSLConfigPath $backupPath -Force
-            Write-Host "✓ Backed up existing config to: $backupPath" -ForegroundColor Green
+            Write-Host "Backed up existing config to: $backupPath" -ForegroundColor Green
         }
         
         # Read existing configuration or create new one
         $wslConfig = if (Test-Path $script:Config.WSLConfigPath) {
             Read-IniFile -Path $script:Config.WSLConfigPath
-        } else {
+        }
+        else {
             @{}
         }
         
@@ -845,13 +853,13 @@ function Update-WSLConfiguration {
         # Escape backslashes in paths for WSL config
         $escapedKernelPath = $KernelInfo.KernelPath -replace '\\', '\\'
         $wslConfig["wsl2"]["kernel"] = $escapedKernelPath
-        Write-Host "✓ Set kernel path: $escapedKernelPath" -ForegroundColor Green
+        Write-Host "Set kernel path: $escapedKernelPath" -ForegroundColor Green
         
         # Update modules path if available
-        if ($KernelInfo.ModulesPath) {
-            $escapedModulesPath = $KernelInfo.ModulesPath -replace '\\', '\\'
-            $wslConfig["wsl2"]["modulesPath"] = $escapedModulesPath
-            Write-Host "✓ Set modules path: $escapedModulesPath" -ForegroundColor Green
+        if ($KernelInfo.KernelModules) {
+            $escapedKernelModules = $KernelInfo.KernelModules -replace '\\', '\\'
+            $wslConfig["wsl2"]["kernelModules"] = $escapedKernelModules
+            Write-Host "Set modules path: $escapedKernelModules" -ForegroundColor Green
         }
         
         # Add metadata comment
@@ -859,10 +867,11 @@ function Update-WSLConfiguration {
         
         # Write updated configuration
         Write-IniFile -Data $wslConfig -Path $script:Config.WSLConfigPath
-        Write-Host "✓ Updated .wslconfig successfully" -ForegroundColor Green
+        Write-Host "Updated .wslconfig successfully" -ForegroundColor Green
         
         return $true
-    } catch {
+    }
+    catch {
         Write-Error "❌ Failed to update WSL configuration: $($_.Exception.Message)"
         return $false
     }
@@ -878,19 +887,19 @@ function Show-InstallationSummary {
         [hashtable]$KernelInfo
     )
     
-    Write-Host "`n🎉 Installation Complete!" -ForegroundColor Green
+    Write-Host "`nInstallation Complete!" -ForegroundColor Green
     Write-Host "===========================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "📋 Installation Summary:" -ForegroundColor Cyan
+    Write-Host "Installation Summary:" -ForegroundColor Cyan
     Write-Host "  Kernel Version: $($KernelInfo.Version)" -ForegroundColor White
     Write-Host "  Kernel Path: $($KernelInfo.KernelPath)" -ForegroundColor Gray
-    if ($KernelInfo.ModulesPath) {
-        Write-Host "  Modules Path: $($KernelInfo.ModulesPath)" -ForegroundColor Gray
+    if ($KernelInfo.KernelModules) {
+        Write-Host "  Modules Path: $($KernelInfo.KernelModules)" -ForegroundColor Gray
     }
     Write-Host "  Install Directory: $($KernelInfo.InstallDir)" -ForegroundColor Gray
     Write-Host "  WSL Config: $($script:Config.WSLConfigPath)" -ForegroundColor Gray
     
-    Write-Host "`n🔄 Next Steps:" -ForegroundColor Yellow
+    Write-Host "`nNext Steps:" -ForegroundColor Yellow
     Write-Host "1. Restart WSL to use the new kernel:" -ForegroundColor White
     Write-Host "   wsl --shutdown" -ForegroundColor Gray
     Write-Host "   wsl" -ForegroundColor Gray
@@ -932,12 +941,16 @@ try {
             Write-Host "Available artifacts:" -ForegroundColor Yellow
             $artifacts | ForEach-Object { Write-Host " - $($_.name)" -ForegroundColor Gray }
             exit 1
-        } else {
-            Write-Host "✓ Selected artifact: $($selectedArtifact.name) (matched by version: $Version)" -ForegroundColor Green
         }
-    } else {
+        else {
+            Write-Host "Selected artifact: $($selectedArtifact.name) (matched by version: $Version)" -ForegroundColor Green
+        }
+    }
+    else {
+        # Reverse sort artifacts by name
+        $artifacts = $artifacts | Sort-Object -Property name -Descending
         # Show menu and get user selection
-        $selectedArtifact = Show-ArtifactMenu -Artifacts $artifacts -Title "🔧 Choose a WSL2 Kernel to Install"
+        $selectedArtifact = Show-ArtifactMenu -Artifacts $artifacts -Title "Choose a WSL2 Kernel to Install"
         if (-not $selectedArtifact) {
             Write-Host "Installation cancelled by user." -ForegroundColor Yellow
             exit 0
@@ -958,10 +971,11 @@ try {
     # Show installation summary
     Show-InstallationSummary -KernelInfo $kernelInfo
     
-} catch {
+}
+catch {
     Write-Error "❌ Installation failed: $($_.Exception.Message)"
     Write-Host ""
-    Write-Host "💡 Troubleshooting:" -ForegroundColor Blue
+    Write-Host "Troubleshooting:" -ForegroundColor Blue
     Write-Host "- Ensure you have write permissions to $($script:Config.UserHome)" -ForegroundColor Gray
     Write-Host "- Check your internet connection for GitHub API access" -ForegroundColor Gray
     Write-Host "- Try running with -EnableDebug for more detailed output" -ForegroundColor Gray

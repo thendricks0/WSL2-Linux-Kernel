@@ -1,4 +1,4 @@
-name: Build WSL2 Kernel
+name: Build Kernel
 
 on:
   push:
@@ -242,5 +242,5 @@ jobs:
           echo "- \`build-info.txt\`: Build metadata" >> $GITHUB_STEP_SUMMARY
           echo "## Installation command" >> $GITHUB_STEP_SUMMARY
           echo '```powershell' >> $GITHUB_STEP_SUMMARY
-          echo 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('"'https://raw.githubusercontent.com/thendricks0/WSL2-Linux-Kernel/ci/Install-WSL2Kernel.ps1'"'))' >> $GITHUB_STEP_SUMMARY
+          echo 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('"'https://raw.githubusercontent.com/${{ github.repository }}/ci/Install-WSL2Kernel.ps1'"'))' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
