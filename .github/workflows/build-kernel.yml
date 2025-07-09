@@ -77,6 +77,7 @@ jobs:
 
       - name: Setup ccache
         run: |
+          mkdir -p "$PWD/.cache/"
           echo "/usr/lib/ccache" >> $GITHUB_PATH
           ccache --set-config=cache_dir=$PWD/.cache/ccache
           ccache --set-config=max_size=5G
