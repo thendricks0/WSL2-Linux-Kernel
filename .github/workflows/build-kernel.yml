@@ -171,7 +171,8 @@ jobs:
           # Cleanup
           rm -rf "$tmp_dir"
 
-      - name: Prepare artifacts
+      - name: Prepare and zip release assets
+        id: prepare-assets
         run: |
           # Create artifacts directory
           mkdir -p artifacts
@@ -187,7 +188,45 @@ jobs:
           # Copy kernel config
           cp -v $KERNEL_CONFIG artifacts/config-${{ steps.kernel-version.outputs.release }}
 
-          # Create build info
+          # Create build summary for release description
+          cat > build-summary.md << EOF
+          ## Build Summary
+
+          - **Kernel Version**: ${{ steps.kernel-version.outputs.release }}
+          - **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - **Git Commit**: ${{ steps.kernel-version.outputs.sha }}
+          - **Git Branch**: ${{ steps.kernel-version.outputs.ref }}
+          - **Workflow Run**: [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ### Build Performance
+          \`\`\`
+          $(ccache --show-stats)
+          \`\`\`
+
+          Build time: ${{ steps.build-kernel.outputs.time_summary }}
+
+          ### System Information
+          - **CPU**: $(nproc) cores
+          - $(lscpu | grep "Model name")
+          - **Memory**: $(free -h | grep Mem | awk '{print $2}')
+
+          ### Assets Included
+          - \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image
+          $(if [ -f "modules.vhdx" ]; then echo "- \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format"; fi)
+          - \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used
+
+          ## Installation
+
+          Use the automated PowerShell installer:
+
+          \`\`\`powershell
+          Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/${{ github.repository }}/ci/Install-WSL2Kernel.ps1'))
+          \`\`\`
+
+          Or download and extract the zip file manually to \`%USERPROFILE%\\wsl\\kernels\` and update your \`.wslconfig\`.
+          EOF
+
+          # Create build info for the zip
           cat > artifacts/build-info.txt << EOF
           Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           Kernel Version: ${{ steps.kernel-version.outputs.release }}
@@ -195,6 +234,7 @@ jobs:
           Git Ref: ${{ steps.kernel-version.outputs.ref }}
           Workflow Run: ${{ github.run_number }}
           Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
           System Info:
           CPU: $(nproc) cores
           $(lscpu | grep "Model name")
@@ -210,14 +250,53 @@ jobs:
           # List artifacts
           ls -la artifacts/
 
-      - name: Upload kernel artifacts
-        id: upload-artifacts
-        uses: actions/upload-artifact@v4
+          # Create zip file with all assets
+          cd artifacts
+          zip -r "../wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" .
+          cd ..
+
+          # List what we created
+          echo "==> Created zip file:"
+          ls -la wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip
+          echo "==> Zip contents:"
+          unzip -l wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip
+          
+          echo "zip_file=wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" >> $GITHUB_OUTPUT
+
+      - name: Checkout own repository for release
+        uses: actions/checkout@v4
         with:
-          name: wsl2-kernel-${{ steps.kernel-version.outputs.release }}_${{ github.run_number }}
-          path: artifacts/
-          retention-days: 1
-          compression-level: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: release-repo
+
+      - name: Create kernel version release
+        id: create-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd release-repo
+          
+          RELEASE_TAG="${{ steps.kernel-version.outputs.version }}"
+          RELEASE_NAME="linux-msft-wsl-${{ steps.kernel-version.outputs.version }}"
+          
+          echo "==> Creating release: $RELEASE_NAME with tag: $RELEASE_TAG"
+          
+          # Check if release already exists and delete it if it does
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "==> Release $RELEASE_TAG already exists, deleting it first"
+            gh release delete "$RELEASE_TAG" --yes
+          fi
+          
+          # Create new release with build summary as description
+          gh release create "$RELEASE_TAG" \
+            "../${{ steps.prepare-assets.outputs.zip_file }}" \
+            --title "$RELEASE_NAME" \
+            --notes-file "../build-summary.md" \
+            --prerelease
+          
+          echo "==> Release created successfully"
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
 
       - name: Build summary
         run: |
@@ -226,7 +305,7 @@ jobs:
           echo "- **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: ${{ steps.kernel-version.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: ${{ steps.kernel-version.outputs.ref }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifacts**: Available for 2 days" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release**: [${{ steps.create-release.outputs.release_name }}](https://github.com/${{ github.repository }}/releases/tag/${{ steps.create-release.outputs.release_tag }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Build Performance" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -234,13 +313,14 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "Build time: ${{ steps.build-kernel.outputs.time_summary }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Artifacts Created" >> $GITHUB_STEP_SUMMARY
-          echo "- \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Asset" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.prepare-assets.outputs.zip_file }}\`: Complete kernel package containing:" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image" >> $GITHUB_STEP_SUMMARY
           if [ -f "artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx" ]; then
-            echo "- \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format" >> $GITHUB_STEP_SUMMARY
+            echo "  - \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "- \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used" >> $GITHUB_STEP_SUMMARY
-          echo "- \`build-info.txt\`: Build metadata" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`build-info.txt\`: Build metadata" >> $GITHUB_STEP_SUMMARY
           echo "## Installation command" >> $GITHUB_STEP_SUMMARY
           echo '```powershell' >> $GITHUB_STEP_SUMMARY
           echo 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('"'https://raw.githubusercontent.com/${{ github.repository }}/ci/Install-WSL2Kernel.ps1'"'))' >> $GITHUB_STEP_SUMMARY
