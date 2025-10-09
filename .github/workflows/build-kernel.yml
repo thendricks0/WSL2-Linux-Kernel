@@ -5,6 +5,11 @@ on:
     branches:
       - ci
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner label to use for the build job'
+        required: false
+        default: ''
   schedule:
     - cron: "0 1 * * *" # Every day at 01:00 am UTC
 
@@ -97,43 +102,9 @@ jobs:
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
           rm -rf WSL2-Linux-Kernel*
 
-  check-runner:
-    runs-on: self-hosted
-    needs: prepare
-    continue-on-error: true
-    outputs:
-      runner-cores: ${{ steps.check-runner.outputs.runner-cores }}
-    steps:
-      - name: Check self-hosted runner availability
-        id: check-runner
-        run: |
-          echo "Self-hosted runner is available"
-          echo "runner-cores=$(nproc)" >> $GITHUB_OUTPUT
-
-  set-runner-label:
-    runs-on: ubuntu-latest
-    needs: check-runner
-    if: always()
-    outputs:
-      runner-label: ${{ steps.set-runner-label.outputs.runner-label }}
-      runner-cores: ${{ steps.set-runner-label.outputs.runner-cores }}
-    steps:
-      - name: Set runner label to self-hosted
-        id: set-runner-label
-        run: |
-          if [ "${{ needs.check-runner.result }}" == "success" ]; then
-            echo "Self-hosted runner is available, using self-hosted"
-            echo "runner-label=self-hosted" >> $GITHUB_OUTPUT
-            echo "runner-cores=${{ needs.check-runner.outputs.runner-cores }}" >> $GITHUB_OUTPUT
-          else
-            echo "Self-hosted runner is not available, using ubuntu-latest"
-            echo "runner-label=ubuntu-latest" >> $GITHUB_OUTPUT
-            echo "runner-cores=$(nproc)" >> $GITHUB_OUTPUT
-          fi
-
   build:
     needs: [prepare, set-runner-label]
-    runs-on: ${{ needs.set-runner-label.outputs.runner-label }}
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
     container: ubuntu:24.04
 
     strategy:
