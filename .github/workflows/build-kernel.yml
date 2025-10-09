@@ -92,7 +92,7 @@ jobs:
         id: merge
         run: |
           # Merge all branch lists
-          merged_json=$(jq -s 'add | unique' <<< "${{ steps.microsoft-branches.outputs.branches }} ${!steps.rolling-lts-branches.outputs.branches} ${!steps.rolling-stable-branches.outputs.branches}")
+          merged_json=$(jq -s 'add | unique' <<< "${{ steps.microsoft-branches.outputs.branches }} ${{ steps.rolling-lts-branches.outputs.branches }} ${{ steps.rolling-stable-branches.outputs.branches }}")
           echo "==> Merged branches: $merged_json"
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
 
