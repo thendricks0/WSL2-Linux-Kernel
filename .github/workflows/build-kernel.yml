@@ -13,7 +13,6 @@ env:
     # Custom kernel configuration options
     CONFIG_LOCALVERSION="-sybit-custom-WSL2"
   DEBIAN_FRONTEND: noninteractive
-  MAX_PARALLEL: 2
 
 jobs:
   prepare:
@@ -139,7 +138,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      max-parallel: ${{ env.MAX_PARALLEL }}
+      max-parallel: ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
@@ -201,7 +200,7 @@ jobs:
           echo "==> Starting kernel build with ${{ needs.set-runner-label.outputs.runner-cores }} parallel threads"
 
           # Build kernel with parallel jobs and ccache
-          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.set-runner-label.outputs.runner-cores }} / $MAX_PARALLEL" | bc)
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.set-runner-label.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc)
 
           # Install modules to local directory
           make KCONFIG_CONFIG=${{ matrix.kconfig }} INSTALL_MOD_PATH="$PWD/modules" modules_install
