@@ -36,8 +36,8 @@ jobs:
           json=$(echo "$branches" | jq -R . | jq -s .)
           echo "==> Available branches: $json"
 
-          # Filter old kernels we don't need 4.19, 5.4, 5.10
-          branches=$(echo "$branches" | grep -vE '^(linux-msft-wsl-(4\.19|5\.4|5\.10)\.)')
+          # Filter old kernels we don't need 4.19, 5.4, 5.10, 5.15, 6.1
+          branches=$(echo "$branches" | grep -vE '^(linux-msft-wsl-(4\.19|5\.4|5\.10|5\.15|6\.1)\.)')
           branches=$(echo "$branches" | sort -V)
 
           # Convert to JSON array
