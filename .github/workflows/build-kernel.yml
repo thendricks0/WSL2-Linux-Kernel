@@ -118,11 +118,13 @@ jobs:
   build:
     needs: prepare
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
-    container: ubuntu:24.04
+    container:
+      image: ubuntu:24.04
+      options: --privileged
 
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJson(vars.MATRIX_PARALLEL_JOBS || '2') }}
+      max-parallel: ${{ fromJson(vars.MATRIX_PARALLEL_JOBS || 2) }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
