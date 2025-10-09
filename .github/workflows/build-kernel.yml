@@ -9,12 +9,11 @@ on:
     - cron: "0 1 * * *" # Every day at 01:00 am UTC
 
 env:
-  KERNEL_CONFIG: Microsoft/config-wsl
-  KERNEL_CONFIG_FALLBACK: arch/x86/configs/config-wsl-x86
   CUSTOM_KERNEL_CONFIG: |
     # Custom kernel configuration options
-    CONFIG_LOCALVERSION="-microsoft-custom-WSL2"
+    CONFIG_LOCALVERSION="-sybit-custom-WSL2"
   DEBIAN_FRONTEND: noninteractive
+  MAX_PARALLEL: 2
 
 jobs:
   prepare:
@@ -41,7 +40,7 @@ jobs:
           branches=$(echo "$branches" | sort -V)
 
           # Convert to JSON array
-          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "microsoft/WSL2-Linux-Kernel", "branch": . })')
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "microsoft/WSL2-Linux-Kernel", "kconfig": "Microsoft/config-wsl", "branch": . })')
           echo "==> Selected branches: $(echo $json | jq)"
 
           echo "branches=$json" >> $GITHUB_OUTPUT
@@ -62,7 +61,7 @@ jobs:
           branches=$(echo "$branches" | sort -V)
 
           # Convert to JSON array
-          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling-LTS", "branch": . })')
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling-LTS", "kconfig": "arch/x86/configs/config-wsl-x86", "branch": . })')
           echo "==> Selected branches: $(echo $json | jq)"
 
           echo "branches=$json" >> $GITHUB_OUTPUT
@@ -83,7 +82,7 @@ jobs:
           branches=$(echo "$branches" | sort -V)
 
           # Convert to JSON array
-          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling", "branch": . })')
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling", "kconfig": "arch/x86/configs/config-wsl-x86", "branch": . })')
           echo "==> Selected branches: $(echo $json | jq)"
 
           echo "branches=$json" >> $GITHUB_OUTPUT
@@ -91,21 +90,56 @@ jobs:
       - name: Merge branches for matrix
         id: merge
         run: |
-          # Merge all branch lists
           ms_branches='${{ steps.microsoft-branches.outputs.branches }}'
           lts_branches='${{ steps.rolling-lts-branches.outputs.branches }}'
           stable_branches='${{ steps.rolling-stable-branches.outputs.branches }}'
           merged_json=$(jq -cs 'add | { "include": . }' <<< "$ms_branches $lts_branches $stable_branches")
           echo "==> Merged branches: $merged_json"
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
+          rm -rf WSL2-Linux-Kernel*
+
+  check-runner:
+    runs-on: self-hosted
+    needs: prepare
+    continue-on-error: true
+    outputs:
+      runner-cores: ${{ steps.check-runner.outputs.runner-cores }}
+    steps:
+      - name: Check self-hosted runner availability
+        id: check-runner
+        run: |
+          echo "Self-hosted runner is available"
+          echo "runner-cores=$(nproc)" >> $GITHUB_OUTPUT
+
+  set-runner-label:
+    runs-on: ubuntu-latest
+    needs: check-runner
+    if: always()
+    outputs:
+      runner-label: ${{ steps.set-runner-label.outputs.runner-label }}
+      runner-cores: ${{ steps.set-runner-label.outputs.runner-cores }}
+    steps:
+      - name: Set runner label to self-hosted
+        id: set-runner-label
+        run: |
+          if [ "${{ needs.check-runner.result }}" == "success" ]; then
+            echo "Self-hosted runner is available, using self-hosted"
+            echo "runner-label=self-hosted" >> $GITHUB_OUTPUT
+            echo "runner-cores=${{ needs.check-runner.outputs.runner-cores }}" >> $GITHUB_OUTPUT
+          else
+            echo "Self-hosted runner is not available, using ubuntu-latest"
+            echo "runner-label=ubuntu-latest" >> $GITHUB_OUTPUT
+            echo "runner-cores=$(nproc)" >> $GITHUB_OUTPUT
+          fi
 
   build:
-    needs: prepare
-    runs-on: ubuntu-latest
+    needs: [prepare, set-runner-label]
+    runs-on: ${{ needs.set-runner-label.outputs.runner-label }}
+    container: ubuntu:24.04
 
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: ${{ env.MAX_PARALLEL }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
@@ -150,31 +184,27 @@ jobs:
 
       - name: Verify kernel configuration exists
         run: |
-          if [ ! -f "$KERNEL_CONFIG" ]; then
-            echo "Error: Kernel config file $KERNEL_CONFIG not found, defaulting to standard Kconfig"
-            exit 0
+          if [ ! -f "${{ matrix.kconfig }}" ]; then
+            echo "Error: Kernel config file ${{ matrix.kconfig }} not found"
+            exit 1
           fi
-          echo "==> Using kernel config: $KERNEL_CONFIG"
+          echo "==> Using kernel config: ${{ matrix.kconfig }}"
           echo "==> Custom kernel config: $CUSTOM_KERNEL_CONFIG"
-          echo "$CUSTOM_KERNEL_CONFIG" >> $KERNEL_CONFIG
+          echo "$CUSTOM_KERNEL_CONFIG" >> ${{ matrix.kconfig }}
           echo "==> Kernel config after modification:"
-          cat $KERNEL_CONFIG
+          cat ${{ matrix.kconfig }}
 
       - name: Build kernel
         id: build-kernel
         run: |
           time_start=$(date +%s)
-          echo "==> Starting kernel build with $(nproc) parallel jobs"
-
-          if [ ! -f "$KERNEL_CONFIG" ]; then
-            KERNEL_CONFIG=$KERNEL_CONFIG_FALLBACK
-          fi
+          echo "==> Starting kernel build with ${{ needs.set-runner-label.outputs.runner-cores }} parallel threads"
 
           # Build kernel with parallel jobs and ccache
-          make KCONFIG_CONFIG=$KERNEL_CONFIG -j$(nproc)
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.set-runner-label.outputs.runner-cores }} / $MAX_PARALLEL" | bc)
 
           # Install modules to local directory
-          make KCONFIG_CONFIG=$KERNEL_CONFIG INSTALL_MOD_PATH="$PWD/modules" modules_install
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} INSTALL_MOD_PATH="$PWD/modules" modules_install
           time_end=$(date +%s)
           time_taken=$((time_end - time_start))
           echo "==> Kernel build completed in $((time_taken / 60)) minutes and $((time_taken % 60)) seconds"
@@ -184,8 +214,8 @@ jobs:
         id: kernel-version
         run: |
           KERNEL_RELEASE=$(make -s kernelrelease)
-          # Strip -microsoft-standard-* from the version
-          STRIPPED_VERSION=$(echo "$KERNEL_RELEASE" | sed 's/-microsoft-.*//')
+          # Strip -sybit-* from the version
+          STRIPPED_VERSION=$(echo "$KERNEL_RELEASE" | sed 's/-sybit-.*//')
 
           echo "release=$KERNEL_RELEASE" >> $GITHUB_OUTPUT
           echo "version=$STRIPPED_VERSION" >> $GITHUB_OUTPUT
@@ -250,10 +280,7 @@ jobs:
           fi
 
           # Copy kernel config
-          if [ ! -f "$KERNEL_CONFIG" ]; then
-            KERNEL_CONFIG=$KERNEL_CONFIG_FALLBACK
-          fi
-          cp -v $KERNEL_CONFIG artifacts/config-${{ steps.kernel-version.outputs.release }}
+          cp -v ${{ matrix.kconfig }} artifacts/config-${{ steps.kernel-version.outputs.release }}
 
           # Create build summary for release description
           cat > build-summary.md << EOF
@@ -273,9 +300,8 @@ jobs:
           Build time: ${{ steps.build-kernel.outputs.time_summary }}
 
           ### System Information
-          - **CPU**: $(nproc) cores
-          - $(lscpu | grep "Model name")
-          - **Memory**: $(free -h | grep Mem | awk '{print $2}')
+          - **CPU**: $(lscpu | grep "Model name") (${{ needs.set-runner-label.outputs.runner-cores }} cores)
+          - **Memory**: $(free -h | grep Mem | awk '{print $2}')B
 
           ### Assets Included
           - \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image
@@ -303,9 +329,8 @@ jobs:
           Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           
           System Info:
-          CPU: $(nproc) cores
-          $(lscpu | grep "Model name")
-          Memory: $(free -h | grep Mem)
+          CPU: $(lscpu | grep "Model name") (${{ needs.set-runner-label.outputs.runner-cores }} cores)
+          Memory: $(free -h | grep Mem | awk '{print $2}')B
 
           ccache Stats:
           $(ccache --show-stats --verbose)
@@ -358,8 +383,7 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "../${{ steps.prepare-assets.outputs.zip_file }}" \
             --title "$RELEASE_NAME" \
-            --notes-file "../build-summary.md" \
-            --prerelease
+            --notes-file "../build-summary.md"
           
           echo "==> Release created successfully"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
