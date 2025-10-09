@@ -103,7 +103,7 @@ jobs:
           rm -rf WSL2-Linux-Kernel*
 
   build:
-    needs: [prepare, set-runner-label]
+    needs: prepare
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
     container: ubuntu:24.04
 
