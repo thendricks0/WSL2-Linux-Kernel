@@ -124,6 +124,7 @@ jobs:
           key: ${{ runner.os }}-ccache-${{ matrix.branch }}-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.branch }}-
+            ${{ runner.os }}-ccache-
 
       - name: Remove /opt/hostedtoolcache
         run: |
