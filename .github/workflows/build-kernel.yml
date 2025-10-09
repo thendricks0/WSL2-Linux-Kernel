@@ -102,6 +102,10 @@ jobs:
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
           rm -rf WSL2-Linux-Kernel*
 
+      - name: Remove /opt/hostedtoolcache
+        run: |
+          sudo rm -rf /opt/hostedtoolcache
+
   build:
     needs: prepare
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
@@ -130,14 +134,10 @@ jobs:
             ${{ runner.os }}-ccache-${{ matrix.branch }}-
             ${{ runner.os }}-ccache-
 
-      - name: Remove /opt/hostedtoolcache
-        run: |
-          sudo rm -rf /opt/hostedtoolcache
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache
+          apt-get update
+          apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache
 
       - name: Setup ccache
         run: |
@@ -213,24 +213,24 @@ jobs:
           dd if=/dev/zero of="$tmp_dir/modules.img" bs=1024 count=$((modules_size / 1024))
 
           echo "==> Setting up loopback device and filesystem"
-          lo_dev=$(sudo losetup --find --show "$tmp_dir/modules.img")
-          sudo mkfs -t ext4 "$lo_dev"
+          lo_dev=$(losetup --find --show "$tmp_dir/modules.img")
+          mkfs -t ext4 "$lo_dev"
 
           echo "==> Mounting and copying modules"
-          sudo mkdir -p "$tmp_dir/modules_img"
-          sudo mount "$lo_dev" "$tmp_dir/modules_img"
-          sudo chmod a+rw "$tmp_dir/modules_img"
+          mkdir -p "$tmp_dir/modules_img"
+          mount "$lo_dev" "$tmp_dir/modules_img"
+          chmod a+rw "$tmp_dir/modules_img"
 
           # Copy modules
-          sudo cp -rv "$MODULE_DIR"/* "$tmp_dir/modules_img/"
+          cp -rv "$MODULE_DIR"/* "$tmp_dir/modules_img/"
 
           echo "==> Unmounting and converting to VHDX"
-          sudo umount "$tmp_dir/modules_img"
-          sudo losetup -d "$lo_dev"
+          umount "$tmp_dir/modules_img"
+          losetup -d "$lo_dev"
 
           # Convert to VHDX
-          sudo qemu-img convert -O vhdx "$tmp_dir/modules.img" modules.vhdx
-          sudo chmod 644 modules.vhdx
+          qemu-img convert -O vhdx "$tmp_dir/modules.img" modules.vhdx
+          chmod 644 modules.vhdx
 
           # Cleanup
           rm -rf "$tmp_dir"
