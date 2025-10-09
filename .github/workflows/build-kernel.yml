@@ -26,6 +26,8 @@ jobs:
       - name: Gather available branches from microsoft/WSL2-Linux-Kernel
         id: microsoft-branches
         run: |
+          mkdir -p WSL2-Linux-Kernel
+          cd WSL2-Linux-Kernel
           git init
           git remote add origin https://github.com/microsoft/WSL2-Linux-Kernel.git
 
@@ -47,6 +49,8 @@ jobs:
       - name: Gather available branches from Nevuly/WSL2-Linux-Kernel-Rolling-LTS
         id: rolling-lts-branches
         run: |
+          mkdir -p WSL2-Linux-Kernel-Rolling-LTS
+          cd WSL2-Linux-Kernel-Rolling-LTS
           git init
           git remote add origin https://github.com/Nevuly/WSL2-Linux-Kernel-Rolling-LTS.git
 
@@ -66,6 +70,8 @@ jobs:
       - name: Gather available branches from Nevuly/WSL2-Linux-Kernel-Rolling
         id: rolling-stable-branches
         run: |
+          mkdir -p WSL2-Linux-Kernel-Rolling
+          cd WSL2-Linux-Kernel-Rolling
           git init
           git remote add origin https://github.com/Nevuly/WSL2-Linux-Kernel-Rolling.git
 
