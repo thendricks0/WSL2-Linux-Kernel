@@ -138,7 +138,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      max-parallel: ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}
+      max-parallel: ${{ fromJson(vars.MATRIX_PARALLEL_JOBS || '2') }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
