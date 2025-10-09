@@ -77,7 +77,7 @@ jobs:
 
           # Get remote braches that start with "wsl-"
           branches=$(git ls-remote --heads origin | grep -o 'refs/heads/wsl-[0-9]*\.[0-9]*.*-rolling$' | sed 's|refs/heads/||')
-          json=$(echo "$branches" | jq -R . | jq -s .)
+          json=$(echo "$branches" | jq -R . | jq -cs .)
           echo "==> Available branches: $json"
 
           branches=$(echo "$branches" | sort -V)
@@ -92,7 +92,10 @@ jobs:
         id: merge
         run: |
           # Merge all branch lists
-          merged_json=$(jq -s 'add | unique' <<< "${{ steps.microsoft-branches.outputs.branches }} ${{ steps.rolling-lts-branches.outputs.branches }} ${{ steps.rolling-stable-branches.outputs.branches }}")
+          ms_branches="${{ steps.microsoft-branches.outputs.branches }}"
+          lts_branches="${{ steps.rolling-lts-branches.outputs.branches }}"
+          stable_branches="${{ steps.rolling-stable-branches.outputs.branches }}"
+          merged_json=$(jq -cs 'add' <<< "$ms_branches $lts_branches $stable_branches")
           echo "==> Merged branches: $merged_json"
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
 
