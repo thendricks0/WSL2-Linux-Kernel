@@ -95,7 +95,7 @@ jobs:
           ms_branches='${{ steps.microsoft-branches.outputs.branches }}'
           lts_branches='${{ steps.rolling-lts-branches.outputs.branches }}'
           stable_branches='${{ steps.rolling-stable-branches.outputs.branches }}'
-          merged_json=$(jq -cs 'add' <<< "$ms_branches $lts_branches $stable_branches")
+          merged_json=$(jq -cs 'add | { "include": . }' <<< "$ms_branches $lts_branches $stable_branches")
           echo "==> Merged branches: $merged_json"
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
 
