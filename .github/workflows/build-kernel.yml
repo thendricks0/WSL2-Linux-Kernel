@@ -10,6 +10,7 @@ on:
 
 env:
   KERNEL_CONFIG: Microsoft/config-wsl
+  KERNEL_CONFIG_FALLBACK: arch/x86/configs/config-wsl-x86
   CUSTOM_KERNEL_CONFIG: |
     # Custom kernel configuration options
     CONFIG_LOCALVERSION="-microsoft-custom-WSL2"
@@ -19,11 +20,11 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      branches: ${{ steps.branches.outputs.branches }}
+      matrix: ${{ steps.merge.outputs.matrix }}
 
     steps:
       - name: Gather available branches from microsoft/WSL2-Linux-Kernel
-        id: branches
+        id: microsoft-branches
         run: |
           git init
           git remote add origin https://github.com/microsoft/WSL2-Linux-Kernel.git
@@ -38,10 +39,56 @@ jobs:
           branches=$(echo "$branches" | sort -V)
 
           # Convert to JSON array
-          json=$(echo "$branches" | jq -R . | jq -cs .)
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "microsoft/WSL2-Linux-Kernel", "branch": . })')
           echo "==> Selected branches: $(echo $json | jq)"
 
           echo "branches=$json" >> $GITHUB_OUTPUT
+      
+      - name: Gather available branches from Nevuly/WSL2-Linux-Kernel-Rolling-LTS
+        id: rolling-lts-branches
+        run: |
+          git init
+          git remote add origin https://github.com/Nevuly/WSL2-Linux-Kernel-Rolling-LTS.git
+
+          # Get remote braches that start with "wsl-"
+          branches=$(git ls-remote --heads origin | grep -o 'refs/heads/wsl-[0-9]*\.[0-9]*.*-lts$' | sed 's|refs/heads/||')
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling-LTS", "branch": . })')
+          echo "==> Available branches: $json"
+
+          branches=$(echo "$branches" | sort -V)
+
+          # Convert to JSON array
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling-LTS", "branch": . })')
+          echo "==> Selected branches: $(echo $json | jq)"
+
+          echo "branches=$json" >> $GITHUB_OUTPUT
+      
+      - name: Gather available branches from Nevuly/WSL2-Linux-Kernel-Rolling
+        id: rolling-stable-branches
+        run: |
+          git init
+          git remote add origin https://github.com/Nevuly/WSL2-Linux-Kernel-Rolling.git
+
+          # Get remote braches that start with "wsl-"
+          branches=$(git ls-remote --heads origin | grep -o 'refs/heads/wsl-[0-9]*\.[0-9]*.*-rolling$' | sed 's|refs/heads/||')
+          json=$(echo "$branches" | jq -R . | jq -s .)
+          echo "==> Available branches: $json"
+
+          branches=$(echo "$branches" | sort -V)
+
+          # Convert to JSON array
+          json=$(echo "$branches" | jq -R . | jq -cs '. | map({ "repo": "Nevuly/WSL2-Linux-Kernel-Rolling", "branch": . })')
+          echo "==> Selected branches: $(echo $json | jq)"
+
+          echo "branches=$json" >> $GITHUB_OUTPUT
+      
+      - name: Merge branches for matrix
+        id: merge
+        run: |
+          # Merge all branch lists
+          merged_json=$(jq -s 'add | unique' <<< "${{ steps.microsoft-branches.outputs.branches }} ${!steps.rolling-lts-branches.outputs.branches} ${!steps.rolling-stable-branches.outputs.branches}")
+          echo "==> Merged branches: $merged_json"
+          echo "matrix=$merged_json" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
@@ -50,14 +97,13 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 3
-      matrix:
-        branch: ${{ fromJson(needs.prepare.outputs.branches) }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          repository: microsoft/WSL2-Linux-Kernel
+          repository: ${{ matrix.repo }}
           ref: ${{ matrix.branch }}
           fetch-depth: 1
 
@@ -95,8 +141,8 @@ jobs:
       - name: Verify kernel configuration exists
         run: |
           if [ ! -f "$KERNEL_CONFIG" ]; then
-            echo "Error: Kernel config file $KERNEL_CONFIG not found"
-            exit 1
+            echo "Error: Kernel config file $KERNEL_CONFIG not found, defaulting to standard Kconfig"
+            exit 0
           fi
           echo "==> Using kernel config: $KERNEL_CONFIG"
           echo "==> Custom kernel config: $CUSTOM_KERNEL_CONFIG"
@@ -109,6 +155,10 @@ jobs:
         run: |
           time_start=$(date +%s)
           echo "==> Starting kernel build with $(nproc) parallel jobs"
+
+          if [ ! -f "$KERNEL_CONFIG" ]; then
+            KERNEL_CONFIG=$KERNEL_CONFIG_FALLBACK
+          fi
 
           # Build kernel with parallel jobs and ccache
           make KCONFIG_CONFIG=$KERNEL_CONFIG -j$(nproc)
@@ -190,6 +240,9 @@ jobs:
           fi
 
           # Copy kernel config
+          if [ ! -f "$KERNEL_CONFIG" ]; then
+            KERNEL_CONFIG=$KERNEL_CONFIG_FALLBACK
+          fi
           cp -v $KERNEL_CONFIG artifacts/config-${{ steps.kernel-version.outputs.release }}
 
           # Create build summary for release description
