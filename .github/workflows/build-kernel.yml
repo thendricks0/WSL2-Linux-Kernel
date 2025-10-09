@@ -24,6 +24,7 @@ jobs:
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.merge.outputs.matrix }}
+      runner-cores: ${{ steps.runner-info.outputs.cores }}
 
     steps:
       - name: Gather available branches from microsoft/WSL2-Linux-Kernel
@@ -106,6 +107,13 @@ jobs:
         if: github.event.inputs.runner == ''
         run: |
           sudo rm -rf /opt/hostedtoolcache
+      
+      - name: Get runner CPU cores
+        id: runner-info
+        run: |
+          CORES=$(nproc)
+          echo "Runner has $CORES CPU cores"
+          echo "cores=$CORES" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
@@ -177,10 +185,10 @@ jobs:
         id: build-kernel
         run: |
           time_start=$(date +%s)
-          echo "==> Starting kernel build with ${{ needs.set-runner-label.outputs.runner-cores }} parallel threads"
+          echo "==> Starting kernel build with ${{ needs.prepare.outputs.runner-cores }} parallel threads"
 
           # Build kernel with parallel jobs and ccache
-          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.set-runner-label.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc)
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.prepare.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc)
 
           # Install modules to local directory
           make KCONFIG_CONFIG=${{ matrix.kconfig }} INSTALL_MOD_PATH="$PWD/modules" modules_install
@@ -279,7 +287,7 @@ jobs:
           Build time: ${{ steps.build-kernel.outputs.time_summary }}
 
           ### System Information
-          - **CPU**: $(lscpu | grep "Model name") (${{ needs.set-runner-label.outputs.runner-cores }} cores)
+          - **CPU**: $(lscpu | grep "Model name") (${{ needs.prepare.outputs.runner-cores }} cores)
           - **Memory**: $(free -h | grep Mem | awk '{print $2}')B
 
           ### Assets Included
@@ -308,7 +316,7 @@ jobs:
           Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           
           System Info:
-          CPU: $(lscpu | grep "Model name") (${{ needs.set-runner-label.outputs.runner-cores }} cores)
+          CPU: $(lscpu | grep "Model name") (${{ needs.prepare.outputs.runner-cores }} cores)
           Memory: $(free -h | grep Mem | awk '{print $2}')B
 
           ccache Stats:
