@@ -166,7 +166,7 @@ jobs:
           mkdir -p "$PWD/.cache/"
           echo "/usr/lib/ccache" >> $GITHUB_PATH
           ccache --set-config=cache_dir=$PWD/.cache/ccache
-          ccache --set-config=max_size=5G
+          ccache --set-config=max_size=3G
           ccache --set-config=compression=true
           ccache --set-config=stats=true
           ccache --set-config=log_file=$PWD/.cache/ccache.log
