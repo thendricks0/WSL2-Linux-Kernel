@@ -260,12 +260,12 @@ jobs:
           # Create artifacts directory
           mkdir -p artifacts
 
-          # Copy built kernel
-          cp -v arch/x86/boot/bzImage artifacts/bzImage-${{ steps.kernel-version.outputs.version }}
+          # Move built kernel
+          mv -v arch/x86/boot/bzImage artifacts/bzImage-${{ steps.kernel-version.outputs.version }}
 
           if [ -f modules.vhdx ]; then
-            # Copy modules VHDX
-            cp -v modules.vhdx artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx
+            # Move modules VHDX
+            mv -v modules.vhdx artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx
           fi
 
           # Copy kernel config
@@ -344,6 +344,9 @@ jobs:
           
           echo "zip_file=wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" >> $GITHUB_OUTPUT
 
+          # Cleanup to save space on the runner
+          rm -rf artifacts
+
       - name: Checkout own repository for release
         uses: actions/checkout@v4
         with:
@@ -377,6 +380,9 @@ jobs:
           echo "==> Release created successfully"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          
+          # Cleanup release zip
+          rm -f "../${{ steps.prepare-assets.outputs.zip_file }}"
 
       - name: Build summary
         run: |
