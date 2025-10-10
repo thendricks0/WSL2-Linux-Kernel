@@ -65,211 +65,6 @@ Write-Host "WSL2 Kernel Installer" -ForegroundColor Cyan
 Write-Host "========================" -ForegroundColor Cyan
 Write-Host ""
 
-function Get-LatestSuccessfulWorkflow {
-    <#
-    .SYNOPSIS
-    Gets the latest successful workflow run from a GitHub repository.
-    
-    .DESCRIPTION
-    Queries the GitHub API to find the most recent successful workflow run
-    for the specified repository and workflow name.
-    
-    .PARAMETER Owner
-    The GitHub repository owner/organization.
-    
-    .PARAMETER Repository
-    The GitHub repository name.
-    
-    .PARAMETER WorkflowName
-    The name of the workflow to search for (optional, defaults to any workflow).
-    
-    .PARAMETER Token
-    GitHub personal access token for authentication (optional, but required for private repos).
-    
-    .EXAMPLE
-    $workflow = Get-LatestSuccessfulWorkflow -Owner "thendricks0" -Repository "WSL2-Linux-Kernel"
-    
-    .EXAMPLE
-    $workflow = Get-LatestSuccessfulWorkflow -Owner "thendricks0" -Repository "WSL2-Linux-Kernel" -Token $env:GITHUB_TOKEN
-    
-    .OUTPUTS
-    [PSCustomObject] The workflow run object with id, status, conclusion, and other properties
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Owner,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Repository,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$WorkflowName,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$Token
-    )
-    
-    try {
-        Write-Verbose "Querying GitHub API for workflows..."
-        
-        # Build headers
-        $headers = @{
-            'Accept'               = 'application/vnd.github+json'
-            'X-GitHub-Api-Version' = '2022-11-28'
-        }
-        
-        if ($Token) {
-            $headers['Authorization'] = "Bearer $Token"
-            Write-Verbose "Using authentication token"
-        }
-        
-        # First, get all workflows
-        $workflowsUrl = "https://api.github.com/repos/$Owner/$Repository/actions/workflows"
-        Write-Verbose "Requesting workflows: $workflowsUrl"
-        
-        $workflowsResponse = Invoke-RestMethod -Uri $workflowsUrl -Method Get -Headers $headers -ErrorAction Stop
-        
-        if (-not $workflowsResponse.workflows -or $workflowsResponse.workflows.Count -eq 0) {
-            Write-Warning "No workflows found for repository $Owner/$Repository"
-            return $null
-        }
-        
-        # Filter workflows by name if specified
-        $targetWorkflows = $workflowsResponse.workflows
-        if ($WorkflowName) {
-            $targetWorkflows = $targetWorkflows | Where-Object { $_.name -eq $WorkflowName }
-            if (-not $targetWorkflows) {
-                Write-Warning "No workflow found with name '$WorkflowName'"
-                return $null
-            }
-        }
-        
-        Write-Verbose "Found $($targetWorkflows.Count) workflow(s) to check"
-        
-        # Get runs for each workflow and find the latest successful one
-        $latestSuccessfulRun = $null
-        $latestDate = [DateTime]::MinValue
-        
-        foreach ($workflow in $targetWorkflows) {
-            Write-Verbose "Checking runs for workflow: $($workflow.name)"
-            
-            # Escape ampersands for PowerShell 5.1 compatibility
-            $runsUrl = "https://api.github.com/repos/$Owner/$Repository/actions/workflows/$($workflow.id)/runs?status=completed`&conclusion=success`&per_page=1"
-            Write-Verbose "Requesting runs: $runsUrl"
-            $runsResponse = Invoke-RestMethod -Uri $runsUrl -Method Get -Headers $headers -ErrorAction Stop
-        
-            
-            if ($runsResponse.workflow_runs -and $runsResponse.workflow_runs.Count -gt 0) {
-                $run = $runsResponse.workflow_runs[0]
-                $runDate = [DateTime]::Parse($run.created_at)
-                
-                if ($runDate -gt $latestDate) {
-                    $latestDate = $runDate
-                    $latestSuccessfulRun = $run
-                    Write-Verbose "Found newer successful run: $($run.name) (ID: $($run.id)) from $($run.created_at)"
-                }
-            }
-        }
-        
-        if (-not $latestSuccessfulRun) {
-            Write-Warning "No successful workflow runs found"
-            return $null
-        }
-        
-        Write-Verbose "Latest successful workflow: $($latestSuccessfulRun.name) (ID: $($latestSuccessfulRun.id))"
-        Write-Verbose "Created: $($latestSuccessfulRun.created_at), Conclusion: $($latestSuccessfulRun.conclusion)"
-        
-        return $latestSuccessfulRun
-    }
-    catch {
-        Write-Error "Failed to query GitHub API: $($_.Exception.Message)"
-        return $null
-    }
-}
-
-function Get-WorkflowArtifacts {
-    <#
-    .SYNOPSIS
-    Gets the artifacts for a specific workflow run.
-    
-    .DESCRIPTION
-    Queries the GitHub API to retrieve all artifacts for a given workflow run ID.
-    
-    .PARAMETER Owner
-    The GitHub repository owner/organization.
-    
-    .PARAMETER Repository
-    The GitHub repository name.
-    
-    .PARAMETER RunId
-    The workflow run ID to get artifacts for.
-    
-    .PARAMETER Token
-    GitHub personal access token for authentication (optional, but required for private repos).
-    
-    .EXAMPLE
-    $artifacts = Get-WorkflowArtifacts -Owner "thendricks0" -Repository "WSL2-Linux-Kernel" -RunId 12345
-    
-    .OUTPUTS
-    [Array] Array of artifact objects with name, size, download_url, and other properties
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Owner,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Repository,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$RunId,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$Token
-    )
-    
-    try {
-        Write-Verbose "Querying GitHub API for workflow artifacts..."
-        
-        # Build headers
-        $headers = @{
-            'Accept'               = 'application/vnd.github+json'
-            'X-GitHub-Api-Version' = '2022-11-28'
-        }
-        
-        if ($Token) {
-            $headers['Authorization'] = "Bearer $Token"
-            Write-Verbose "Using authentication token"
-        }
-        
-        # Get artifacts for the workflow run
-        $artifactsUrl = "https://api.github.com/repos/$Owner/$Repository/actions/runs/$RunId/artifacts"
-        Write-Verbose "Requesting artifacts: $artifactsUrl"
-        
-        $response = Invoke-RestMethod -Uri $artifactsUrl -Method Get -Headers $headers -ErrorAction Stop
-        
-        if (-not $response.artifacts -or $response.artifacts.Count -eq 0) {
-            Write-Warning "No artifacts found for workflow run $RunId"
-            return @()
-        }
-        
-        Write-Verbose "Found $($response.artifacts.Count) artifact(s)"
-        
-        foreach ($artifact in $response.artifacts) {
-            # Use (1024*1024) instead of 1MB for compatibility
-            $sizeMB = [Math]::Round($artifact.size_in_bytes / (1024 * 1024), 2)
-            Write-Verbose ("  - {0} ({1}) MB" -f $artifact.name, $sizeMB)
-        }
-        
-        return $response.artifacts
-    }
-    catch {
-        Write-Error "Failed to query GitHub API for artifacts: $($_.Exception.Message)"
-        return @()
-    }
-}
-
 function Show-ArtifactMenu {
     <#
     .SYNOPSIS
@@ -371,61 +166,39 @@ function Show-ArtifactMenu {
     } while ($true)
 }
 
-function Download-Artifact {
+function Download-ReleaseAssets {
     <#
     .SYNOPSIS
-    Downloads a GitHub workflow artifact to a specified directory.
+    Downloads and extracts GitHub release zip assets to a specified directory.
     
     .DESCRIPTION
-    Downloads the specified artifact from GitHub to the given destination path.
-    The artifact will be downloaded as a ZIP file and optionally extracted.
+    Downloads the kernel zip file from a GitHub release asset and extracts it.
     
-    .PARAMETER Owner
-    The GitHub repository owner/organization.
-    
-    .PARAMETER Repository
-    The GitHub repository name.
-    
-    .PARAMETER Artifact
-    The artifact object to download.
+    .PARAMETER Asset
+    The transformed asset object containing the zip asset information.
     
     .PARAMETER DestinationPath
-    The directory where the artifact should be downloaded.
+    The directory where the assets should be downloaded and extracted.
     
     .PARAMETER Token
     GitHub personal access token for authentication (optional).
     
-    .PARAMETER Extract
-    Whether to extract the ZIP file after download.
-    
     .EXAMPLE
-    Download-Artifact -Owner "thendricks0" -Repository "WSL2-Linux-Kernel" -Artifact $artifact -DestinationPath "C:\temp"
-    
-    .EXAMPLE  
-    Download-Artifact -Owner "thendricks0" -Repository "WSL2-Linux-Kernel" -Artifact $artifact -DestinationPath "C:\temp" -Token $env:GITHUB_TOKEN
+    Download-ReleaseAssets -Asset $asset -DestinationPath "C:\temp"
     
     .OUTPUTS
-    [string] The path to the downloaded file or extracted directory
+    [string] The path to the extracted files directory
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Owner,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Repository,
-        
-        [Parameter(Mandatory = $true)]
-        [PSCustomObject]$Artifact,
+        [PSCustomObject]$Asset,
         
         [Parameter(Mandatory = $true)]
         [string]$DestinationPath,
         
         [Parameter(Mandatory = $false)]
-        [string]$Token,
-        
-        [Parameter(Mandatory = $false)]
-        [switch]$Extract
+        [string]$Token
     )
     
     try {
@@ -437,78 +210,57 @@ function Download-Artifact {
         
         # Build headers
         $headers = @{
-            'Accept'               = 'application/vnd.github+json'
-            'X-GitHub-Api-Version' = '2022-11-28'
+            'Accept' = 'application/octet-stream'
         }
-        
         if ($Token) {
             $headers['Authorization'] = "Bearer $Token"
             Write-Verbose "Using authentication token"
         }
         
-        $zipFileName = "$($Artifact.name).zip"
+        Write-Host "Downloading kernel package: $($Asset.name)" -ForegroundColor Cyan
+        
+        # Download zip file
+        $zipFileName = $Asset.zip_asset.name
         $zipFilePath = Join-Path $DestinationPath $zipFileName
+        $downloadUrl = $Asset.zip_asset.url
         
-        Write-Host "Downloading artifact: $($Artifact.name)" -ForegroundColor Cyan
-        $sizeMB = [Math]::Round($Artifact.size_in_bytes / (1024 * 1024), 2)
-        Write-Host "Size: $sizeMB MB" -ForegroundColor Gray
-        Write-Host "Destination: $zipFilePath" -ForegroundColor Gray
+        Write-Host "  Downloading: $zipFileName" -ForegroundColor Gray
+        Write-Host "  Download URL: $downloadUrl" -ForegroundColor Gray
+        $sizeMB = [Math]::Round($Asset.zip_asset.size / (1024 * 1024), 2)
+        Write-Host "  Size: $sizeMB MB" -ForegroundColor Gray
         
-        # Determine download URL based on authentication
-        if ($Token) {
-            # Use GitHub API with authentication
-            $downloadUrl = $Artifact.archive_download_url
-            Write-Verbose "Using GitHub API (authenticated): $downloadUrl"
-            Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $zipFilePath -ErrorAction Stop
-        }
-        else {
-            # Use nightly.link for public access (no authentication required)
-            # Get the workflow run ID from the artifact object
-            if (-not $Artifact.workflow_run -or -not $Artifact.workflow_run.id) {
-                throw "Artifact does not contain workflow_run.id information required for nightly.link"
-            }
-            
-            $runId = $Artifact.workflow_run.id
-            
-            # Build nightly.link URL - URL encode the artifact name
-            Add-Type -AssemblyName System.Web
-            $encodedArtifactName = [System.Web.HttpUtility]::UrlEncode($Artifact.name)
-            $nightlyUrl = "https://nightly.link/$Owner/$Repository/actions/runs/$runId/$encodedArtifactName.zip"
-            
-            Write-Verbose "Using nightly.link (no authentication): $nightlyUrl"
-            Write-Host "Using nightly.link service (no GitHub token required)" -ForegroundColor Yellow
-            
-            Invoke-WebRequest -Uri $nightlyUrl -OutFile $zipFilePath -ErrorAction Stop
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $zipFilePath -ErrorAction Stop
+        $ProgressPreference = 'Continue'
+        Write-Host "  Downloaded successfully" -ForegroundColor Green
+        
+        # Extract zip file
+        Write-Host "  Extracting kernel package..." -ForegroundColor Gray
+        $extractPath = Join-Path $DestinationPath "extracted"
+        
+        # Remove existing extract directory if it exists
+        if (Test-Path $extractPath) {
+            Remove-Item $extractPath -Recurse -Force
         }
         
-        Write-Host "Download completed!" -ForegroundColor Green
+        # Extract the ZIP file
+        Expand-Archive -Path $zipFilePath -DestinationPath $extractPath -Force
+        Write-Verbose "Extracted to: $extractPath"
         
-        if ($Extract) {
-            Write-Host "Extracting archive..." -ForegroundColor Cyan
-            
-            $extractPath = Join-Path $DestinationPath $Artifact.name
-            
-            # Remove existing extract directory if it exists
-            if (Test-Path $extractPath) {
-                Remove-Item $extractPath -Recurse -Force
-            }
-            
-            # Extract the ZIP file
-            Expand-Archive -Path $zipFilePath -DestinationPath $extractPath -Force
-            Write-Verbose "Extracted to: $extractPath"
-            
-            # Optional: Remove the ZIP file after extraction
-            Remove-Item $zipFilePath -Force
-            Write-Verbose "Removed ZIP file: $zipFilePath"
-            
-            Write-Host "Extraction completed!" -ForegroundColor Green
-            return $extractPath
-        }
+        # Remove the ZIP file after extraction
+        Remove-Item $zipFilePath -Force
+        Write-Verbose "Removed ZIP file: $zipFilePath"
         
-        return $zipFilePath
+        Write-Host "  Extraction completed" -ForegroundColor Green
+        
+        # List extracted contents
+        $extractedFiles = Get-ChildItem $extractPath -File
+        Write-Verbose "Extracted files: $($extractedFiles.Name -join ', ')"
+        
+        return $extractPath
     }
     catch {
-        Write-Error "Failed to download artifact '$($Artifact.name)': $($_.Exception.Message)"
+        Write-Error "Failed to download release assets '$($Asset.name)': $($_.Exception.Message)"
         return $null
     }
 }
@@ -692,40 +444,122 @@ function Initialize-WSLDirectories {
     }
 }
 
-function Get-LatestKernelArtifacts {
+function Get-LatestKernelAssets {
     <#
     .SYNOPSIS
-    Gets the latest kernel artifacts from GitHub
+    Gets the latest kernel assets from GitHub releases
     #>
     try {
         Write-Host "`nQuerying GitHub for latest WSL2 kernels..." -ForegroundColor Yellow
         
-        # Get latest successful workflow
-        Write-Verbose "Getting latest successful workflow..."
-        $workflow = Get-LatestSuccessfulWorkflow -Owner $script:Config.GitHubOwner -Repository $script:Config.GitHubRepo -Token $Token
-        
-        if (-not $workflow) {
-            throw "No successful workflow runs found"
+        # Build headers
+        $headers = @{
+            'Accept'               = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
         }
         
-        Write-Host "Found workflow: $($workflow.name)" -ForegroundColor Green
-        Write-Host "  Run ID: $($workflow.id)" -ForegroundColor Gray
-        Write-Host "  Created: $($workflow.created_at)" -ForegroundColor Gray
-        
-        # Get artifacts for the workflow
-        Write-Verbose "Getting workflow artifacts..."
-        $artifacts = Get-WorkflowArtifacts -Owner $script:Config.GitHubOwner -Repository $script:Config.GitHubRepo -RunId $workflow.id -Token $Token
-        
-        if (-not $artifacts -or $artifacts.Count -eq 0) {
-            throw "No artifacts found for the latest workflow"
+        if ($Token) {
+            $headers['Authorization'] = "Bearer $Token"
+            Write-Verbose "Using authentication token"
         }
         
-        Write-Host "Found $($artifacts.Count) kernel artifact(s)" -ForegroundColor Green
+        # Get all releases (not just latest)
+        $releasesUrl = "https://api.github.com/repos/$($script:Config.GitHubOwner)/$($script:Config.GitHubRepo)/releases"
+        Write-Verbose "Requesting releases: $releasesUrl"
         
-        return $artifacts
+        try {
+            $releases = Invoke-RestMethod -Uri $releasesUrl -Method Get -Headers $headers -ErrorAction Stop
+        }
+        catch {
+            throw "Failed to get releases: $($_.Exception.Message)"
+        }
+        
+        if (-not $releases -or $releases.Count -eq 0) {
+            throw "No releases found in the repository"
+        }
+        
+        Write-Host "Found $($releases.Count) total release(s)" -ForegroundColor Green
+        
+        # Filter releases that have kernel zip assets (wsl2-kernel-*.zip)
+        $kernelReleases = @()
+        foreach ($release in $releases) {
+            Write-Verbose "Processing release $($release.tag_name):"
+            Write-Verbose "Assets in release:"
+            foreach ($asset in $release.assets) {
+                Write-Verbose "  - Asset name: '$($asset.name)'"
+            }
+            
+            $zipAssets = $release.assets | Where-Object { $_.name -match '^wsl2-kernel-.+\.zip$' }
+            
+            # Convert to array and check count properly
+            $zipAssetsArray = @($zipAssets)
+            Write-Verbose "Kernel assets found: $($zipAssetsArray.Count)"
+            
+            if ($zipAssetsArray.Count -gt 0) {
+                Write-Verbose "Found kernel zip assets in release: $($release.tag_name)"
+                $kernelReleases += $release
+            } else {
+                Write-Verbose "No matching zip assets found in release: $($release.tag_name)"
+            }
+        }
+        
+        if ($kernelReleases.Count -eq 0) {
+            throw "No kernel releases found (releases with wsl2-kernel-*.zip assets)"
+        }
+        
+        Write-Host "Found $($kernelReleases.Count) kernel release(s)" -ForegroundColor Green
+        
+        # Transform releases to create synthetic artifact objects for each zip asset
+        $transformedAssets = @()
+        foreach ($release in $kernelReleases) {
+            $zipAssets = $release.assets | Where-Object { $_.name -match '^wsl2-kernel-.+\.zip$' }
+            
+            foreach ($zipAsset in $zipAssets) {
+                # Extract version from zip filename: wsl2-kernel-6.6.36.zip -> 6.6.36
+                if ($zipAsset.name -match '^wsl2-kernel-(.+)\.zip$') {
+                    $version = $matches[1]
+                } else {
+                    $version = "unknown"
+                }
+                
+                Write-Verbose "Processing zip asset: $($zipAsset.name)"
+                Write-Verbose "  Asset ID: $($zipAsset.id)"
+                Write-Verbose "  Asset URL: $($zipAsset.url)"
+                Write-Verbose "  Browser download URL: $($zipAsset.browser_download_url)"
+                Write-Verbose "  Asset size: $($zipAsset.size)"
+                
+                # Create a synthetic artifact object
+                $transformedAsset = [PSCustomObject]@{
+                    name = "wsl2-kernel-$version"
+                    size_in_bytes = $zipAsset.size
+                    created_at = $release.published_at
+                    download_url = $zipAsset.browser_download_url
+                    asset_url = $zipAsset.url
+                    zip_asset = $zipAsset
+                    release_info = @{
+                        tag_name = $release.tag_name
+                        name = $release.name
+                        published_at = $release.published_at
+                    }
+                }
+                
+                $transformedAssets += $transformedAsset
+            }
+        }
+        
+        if ($transformedAssets.Count -eq 0) {
+            throw "No kernel zip assets found in releases"
+        }
+        
+        # Sort by creation date (newest first)
+        $transformedAssets = $transformedAssets | Sort-Object { [DateTime]::Parse($_.created_at) } -Descending
+        
+        Write-Host "Found $($transformedAssets.Count) kernel package(s) total" -ForegroundColor Green
+        
+        return $transformedAssets
     }
     catch {
-        Write-Error "❌ Failed to get kernel artifacts: $($_.Exception.Message)"
+        Write-Error "Failed to get kernel assets: $($_.Exception.Message)"
         return $null
     }
 }
@@ -749,27 +583,26 @@ function Install-SelectedKernel {
         
         Write-Verbose "Created temporary directory: $tempDir"
         
-        # Download and extract the artifact
-        Write-Host "Downloading kernel artifact..." -ForegroundColor Cyan
-        $extractedPath = Download-Artifact -Owner $script:Config.GitHubOwner -Repository $script:Config.GitHubRepo -Artifact $Artifact -DestinationPath $tempDir -Token $Token -Extract
+        # Download the release assets
+        Write-Host "Downloading kernel package..." -ForegroundColor Cyan
+        $extractedPath = Download-ReleaseAssets -Asset $Artifact -DestinationPath $tempDir -Token $Token
         
         if (-not $extractedPath -or -not (Test-Path $extractedPath)) {
-            throw "Failed to download or extract kernel artifact"
+            throw "Failed to download and extract kernel package"
         }
         
-        Write-Host "Kernel downloaded and extracted" -ForegroundColor Green
-        
-        # Analyze extracted contents
-        $kernelFiles = Get-ChildItem $extractedPath -File
-        Write-Verbose "Found files: $($kernelFiles.Name -join ', ')"
+        Write-Host "Kernel package downloaded and extracted successfully" -ForegroundColor Green
         
         # Find kernel and modules files
-        $kernelFile = $kernelFiles | Where-Object { $_.Name -match '^bzImage-' }
-        $modulesFile = $kernelFiles | Where-Object { $_.Name -match '\.vhdx$' }
+        $kernelFiles = Get-ChildItem $extractedPath -File | Where-Object { $_.Name -match '^bzImage-' }
+        $modulesFiles = Get-ChildItem $extractedPath -File | Where-Object { $_.Name -match '^modules-.*\.vhdx$' }
         
-        if (-not $kernelFile) {
-            throw "No kernel file (bzImage-*) found in artifact"
+        if (-not $kernelFiles -or $kernelFiles.Count -eq 0) {
+            throw "No kernel file (bzImage-*) found in extracted package"
         }
+        
+        $kernelFile = $kernelFiles[0]  # Take the first kernel file
+        $modulesFile = if ($modulesFiles.Count -gt 0) { $modulesFiles[0] } else { $null }
         
         Write-Host "Found kernel: $($kernelFile.Name)" -ForegroundColor Green
         if ($modulesFile) {
@@ -777,8 +610,11 @@ function Install-SelectedKernel {
         }
         
         # Create version-specific directory in kernels folder
-        $versionMatch = $kernelFile.Name -match 'bzImage-(.+)'
-        $kernelVersion = if ($matches) { $matches[1] } else { "unknown-$(Get-Date -Format 'yyyyMMdd')" }
+        if ($kernelFile.Name -match 'bzImage-(.+)') {
+            $kernelVersion = $matches[1]
+        } else {
+            $kernelVersion = "unknown-$(Get-Date -Format 'yyyyMMdd')"
+        }
         $kernelInstallDir = $script:Config.WSLKernelsDir
         
         Write-Host "Installing to: $kernelInstallDir" -ForegroundColor Cyan
@@ -799,10 +635,10 @@ function Install-SelectedKernel {
         Remove-Item $tempDir -Recurse -Force
         
         return @{
-            Version     = $kernelVersion
-            KernelPath  = Join-Path $kernelInstallDir $kernelFile.Name
+            Version       = $kernelVersion
+            KernelPath    = Join-Path $kernelInstallDir $kernelFile.Name
             KernelModules = if ($modulesFile) { Join-Path $kernelInstallDir $modulesFile.Name } else { $null }
-            InstallDir  = $kernelInstallDir
+            InstallDir    = $kernelInstallDir
         }
     }
     catch {
@@ -919,8 +755,8 @@ try {
         exit 1
     }
     
-    # Get latest kernel artifacts
-    $artifacts = Get-LatestKernelArtifacts
+    # Get latest kernel assets from release
+    $artifacts = Get-LatestKernelAssets
     if (-not $artifacts) {
         exit 1
     }
