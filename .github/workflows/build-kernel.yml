@@ -140,10 +140,10 @@ jobs:
         with:
           path: |
             .cache/ccache
-          key: ${{ runner.os }}-ccache-${{ matrix.branch }}-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
+          key: ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
           restore-keys: |
-            ${{ runner.os }}-ccache-${{ matrix.branch }}-
-            ${{ runner.os }}-ccache-
+            ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-
+            ${{ runner.os }}-ccache-${{ matrix.repo }}-
 
       - name: Install build dependencies
         run: |
@@ -345,7 +345,7 @@ jobs:
           echo "zip_file=wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" >> $GITHUB_OUTPUT
 
           # Cleanup to save space on the runner
-          rm -rf artifacts
+          rm -rf artifacts/ modules/
 
       - name: Checkout own repository for release
         uses: actions/checkout@v4
