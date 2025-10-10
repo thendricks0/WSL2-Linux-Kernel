@@ -209,6 +209,8 @@ jobs:
           # Strip -sybit-* from the version
           STRIPPED_VERSION=$(echo "$KERNEL_RELEASE" | sed 's/-sybit-.*//')
 
+          git config --global --add safe.directory "$PWD"
+
           echo "release=$KERNEL_RELEASE" >> $GITHUB_OUTPUT
           echo "version=$STRIPPED_VERSION" >> $GITHUB_OUTPUT
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
