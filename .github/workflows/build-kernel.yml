@@ -374,6 +374,9 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "==> Release $RELEASE_TAG already exists, deleting it first"
             gh release delete "$RELEASE_TAG" --yes
+            echo "==> Delete git tag"
+            git tag -d "$RELEASE_TAG" || true
+            git push origin --delete "$RELEASE_TAG" || true
           fi
           
           # Create new release with build summary as description
