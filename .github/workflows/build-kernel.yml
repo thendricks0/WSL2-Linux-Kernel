@@ -251,6 +251,7 @@ jobs:
           echo "==> Unmounting and converting to VHDX"
           umount "$tmp_dir/modules_img"
           losetup -d "$lo_dev"
+          rm -rf "$PWD/modules"
 
           # Convert to VHDX
           qemu-img convert -O vhdx "$tmp_dir/modules.img" modules.vhdx
@@ -350,7 +351,7 @@ jobs:
           echo "zip_file=wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" >> $GITHUB_OUTPUT
 
           # Cleanup to save space on the runner
-          rm -rf artifacts/ modules/
+          rm -rf artifacts/
 
       - name: Checkout own repository for release
         uses: actions/checkout@v4
@@ -419,3 +420,4 @@ jobs:
           echo '```powershell' >> $GITHUB_STEP_SUMMARY
           echo 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('"'https://raw.githubusercontent.com/${{ github.repository }}/ci/Install-WSL2Kernel.ps1'"'))' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          rm -rf *
