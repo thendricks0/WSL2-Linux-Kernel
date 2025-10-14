@@ -179,6 +179,19 @@ jobs:
             echo "==> 🔨 Release $KERNEL_VERSION does not exist, will build"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
+      
+      - name: Install build dependencies
+        if: steps.check-release.outputs.skip != 'true'
+        run: |
+          echo "==> Installing build dependencies"
+          apt-get update
+          apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache jq bc curl gh python3 zstd zip git git-lfs
+
+      - name: Remove /opt/hostedtoolcache contents from GitHub runner
+        if: github.event.inputs.runner == ''
+        run: |
+          find -mindepth 1 -maxdepth 1 /opt/hostedtoolcache -print -exec rm -rf {} + || true
+          echo "==> Removed /opt/hostedtoolcache contents to free up space"
 
       - name: Cache ccache
         if: steps.check-release.outputs.skip != 'true'
@@ -204,18 +217,6 @@ jobs:
           ccache --zero-stats
           echo "==> Initial ccache stats:"
           ccache --show-stats --verbose
-      
-      - name: Install build dependencies
-        if: steps.check-release.outputs.skip != 'true'
-        run: |
-          echo "==> Installing build dependencies"
-          apt-get update
-          apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache jq bc curl gh python3 zstd zip git git-lfs
-
-      - name: Remove /opt/hostedtoolcache contents from GitHub runner
-        if: github.event.inputs.runner == ''
-        run: |
-          find -mindepth 1 -maxdepth 1 /opt/hostedtoolcache -print -exec rm -rf {} + || true
 
       - name: Build kernel
         if: steps.check-release.outputs.skip != 'true'
