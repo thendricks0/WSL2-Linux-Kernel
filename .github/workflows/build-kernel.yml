@@ -103,11 +103,6 @@ jobs:
           echo "matrix=$merged_json" >> $GITHUB_OUTPUT
           rm -rf WSL2-Linux-Kernel*
 
-      - name: Remove /opt/hostedtoolcache from GitHub runner
-        if: github.event.inputs.runner == ''
-        run: |
-          sudo rm -rf /opt/hostedtoolcache
-      
       - name: Get runner CPU cores
         id: runner-info
         run: |
@@ -121,6 +116,8 @@ jobs:
     container:
       image: ubuntu:24.04
       options: --privileged
+      volumes:
+        - /opt/hostedtoolcache:/opt/hostedtoolcache:z
 
     strategy:
       fail-fast: false
@@ -140,9 +137,9 @@ jobs:
           mkdir -p -m 755 /etc/apt/sources.list.d
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 
-          echo "==> Installing build dependencies"
+          echo "==> Installing kernel-check dependencies"
           apt-get update
-          apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache jq bc curl gh python3 zstd zip git git-lfs
+          apt-get install -y gh make git git-lfs
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -150,29 +147,6 @@ jobs:
           repository: ${{ matrix.repo }}
           ref: ${{ matrix.branch }}
           fetch-depth: 1
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cache/ccache
-          key: ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-
-            ${{ runner.os }}-ccache-${{ matrix.repo }}-
-
-      - name: Setup ccache
-        run: |
-          mkdir -p "$PWD/.cache/"
-          echo "/usr/lib/ccache" >> $GITHUB_PATH
-          ccache --set-config=cache_dir=$PWD/.cache/ccache
-          ccache --set-config=max_size=3G
-          ccache --set-config=compression=true
-          ccache --set-config=stats=true
-          ccache --set-config=log_file=$PWD/.cache/ccache.log
-          ccache --zero-stats
-          echo "==> Initial ccache stats:"
-          ccache --show-stats --verbose
 
       - name: Verify kernel configuration exists
         run: |
@@ -185,8 +159,66 @@ jobs:
           echo "$CUSTOM_KERNEL_CONFIG" >> ${{ matrix.kconfig }}
           echo "==> Kernel config after modification:"
           cat ${{ matrix.kconfig }}
+      
+      - name: Check if kernel version already released
+        id: check-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get kernel version that would be built
+          KERNEL_VERSION=$(make KCONFIG_CONFIG=${{ matrix.kconfig }} -s kernelversion)
+          
+          echo "==> Kernel version would be: $KERNEL_VERSION"
+          echo "==> Release tag would be: $KERNEL_VERSION"
+
+          # Check if release exists
+          if gh release view "$KERNEL_VERSION" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "==> ✅ Release $KERNEL_VERSION already exists, skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "==> 🔨 Release $KERNEL_VERSION does not exist, will build"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache ccache
+        if: steps.check-release.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-${{ hashFiles('**/*.c', '**/*.h', 'Makefile', '**/Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.repo }}-${{ matrix.branch }}-
+            ${{ runner.os }}-ccache-${{ matrix.repo }}-
+
+      - name: Setup ccache
+        if: steps.check-release.outputs.skip != 'true'
+        run: |
+          mkdir -p "$PWD/.cache/"
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+          ccache --set-config=cache_dir=$PWD/.cache/ccache
+          ccache --set-config=max_size=3G
+          ccache --set-config=compression=true
+          ccache --set-config=stats=true
+          ccache --set-config=log_file=$PWD/.cache/ccache.log
+          ccache --zero-stats
+          echo "==> Initial ccache stats:"
+          ccache --show-stats --verbose
+      
+      - name: Install build dependencies
+        if: steps.check-release.outputs.skip != 'true'
+        run: |
+          echo "==> Installing build dependencies"
+          apt-get update
+          apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache jq bc curl gh python3 zstd zip git git-lfs
+
+      - name: Remove /opt/hostedtoolcache contents from GitHub runner
+        if: github.event.inputs.runner == ''
+        run: |
+          find -mindepth 1 -maxdepth 1 /opt/hostedtoolcache -print -exec rm -rf {} + || true
 
       - name: Build kernel
+        if: steps.check-release.outputs.skip != 'true'
         id: build-kernel
         run: |
           time_start=$(date +%s)
@@ -203,21 +235,22 @@ jobs:
           echo "time_summary=$((time_taken / 60)) min $((time_taken % 60)) sec" >> $GITHUB_OUTPUT
 
       - name: Get kernel release version
+        if: steps.check-release.outputs.skip != 'true'
         id: kernel-version
         run: |
-          KERNEL_RELEASE=$(make -s kernelrelease)
-          # Strip -sybit-* from the version
-          STRIPPED_VERSION=$(echo "$KERNEL_RELEASE" | sed 's/-sybit-.*//')
+          KERNEL_RELEASE=$(make KCONFIG_CONFIG=${{ matrix.kconfig }} -s kernelrelease)
+          KERNEL_VERSION=$(make KCONFIG_CONFIG=${{ matrix.kconfig }} -s kernelversion)
 
           git config --global --add safe.directory "$PWD"
 
           echo "release=$KERNEL_RELEASE" >> $GITHUB_OUTPUT
-          echo "version=$STRIPPED_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           echo "ref=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
           echo "==> Kernel version: $KERNEL_RELEASE"
 
       - name: Create modules VHDX
+        if: steps.check-release.outputs.skip != 'true'
         run: |
           MODULE_DIR="$PWD/modules/lib/modules/${{ steps.kernel-version.outputs.release }}"
           # Check if we have any .ko files
@@ -261,6 +294,7 @@ jobs:
           rm -rf "$tmp_dir"
 
       - name: Prepare and zip release assets
+        if: steps.check-release.outputs.skip != 'true'
         id: prepare-assets
         run: |
           # Create artifacts directory
@@ -354,12 +388,14 @@ jobs:
           rm -rf artifacts/
 
       - name: Checkout own repository for release
+        if: steps.check-release.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           path: release-repo
 
       - name: Create kernel version release
+        if: steps.check-release.outputs.skip != 'true'
         id: create-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -394,6 +430,7 @@ jobs:
           rm -f "../${{ steps.prepare-assets.outputs.zip_file }}"
 
       - name: Build summary
+        if: steps.check-release.outputs.skip != 'true'
         run: |
           echo "## Build Summary ${{ steps.kernel-version.outputs.release }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Kernel Version**: ${{ steps.kernel-version.outputs.release }}" >> $GITHUB_STEP_SUMMARY
