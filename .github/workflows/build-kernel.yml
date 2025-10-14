@@ -149,10 +149,14 @@ jobs:
           fetch-depth: 1
 
       - name: Verify kernel configuration exists
+        id: verify-config
         run: |
           if [ ! -f "${{ matrix.kconfig }}" ]; then
-            echo "Error: Kernel config file ${{ matrix.kconfig }} not found"
-            exit 1
+            echo "Error: Kernel config file ${{ matrix.kconfig }} not found, defaulting to x86_64_defconfig, this will be a prerelease!"
+            cp -v arch/x86/configs/x86_64_defconfig ${{ matrix.kconfig }}
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
           echo "==> Using kernel config: ${{ matrix.kconfig }}"
           echo "==> Custom kernel config: $CUSTOM_KERNEL_CONFIG"
@@ -418,7 +422,7 @@ jobs:
           fi
           
           # Create new release with build summary as description
-          gh release create "$RELEASE_TAG" \
+          gh release create "$RELEASE_TAG" ${{ steps.verify-config.outputs.prerelease == 'true' && '--prerelease' || '' }} \
             "../${{ steps.prepare-assets.outputs.zip_file }}" \
             --title "$RELEASE_NAME" \
             --notes-file "../build-summary.md"
