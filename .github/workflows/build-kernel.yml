@@ -305,16 +305,27 @@ jobs:
           # Create artifacts directory
           mkdir -p artifacts
 
-          # Move built kernel
-          mv -v arch/x86/boot/bzImage artifacts/bzImage-${{ steps.kernel-version.outputs.version }}
+          # Create versioned subdirectory for kernel assets
+          VERSION_DIR="artifacts/${{ steps.kernel-version.outputs.version }}"
+          mkdir -p "$VERSION_DIR"
+
+          # Move built kernel into versioned directory
+          mv -v arch/x86/boot/bzImage "$VERSION_DIR/bzImage"
 
           if [ -f modules.vhdx ]; then
-            # Move modules VHDX
-            mv -v modules.vhdx artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx
+            # Move modules VHDX into versioned directory
+            mv -v modules.vhdx "$VERSION_DIR/modules.vhdx"
           fi
 
-          # Copy kernel config
-          cp -v ${{ matrix.kconfig }} artifacts/config-${{ steps.kernel-version.outputs.release }}
+          # Copy kernel config into versioned directory
+          cp -v ${{ matrix.kconfig }} "$VERSION_DIR/config"
+
+          # Example wslconfig file
+          cat > "artifacts/example.wslconfig" << EOF
+          [wsl2]
+          kernel=%USERPROFILE%\\wsl\\kernels\\${{ steps.kernel-version.outputs.version }}\\bzImage
+          kernelModules=%USERPROFILE%\\wsl\\kernels\\${{ steps.kernel-version.outputs.version }}\\modules.vhdx
+          EOF
 
           # Create build summary for release description
           cat > build-summary.md << EOF
@@ -338,9 +349,9 @@ jobs:
           - **Memory**: $(free -h | grep Mem | awk '{print $2}')B
 
           ### Assets Included
-          - \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image
-          $(if [ -f "modules.vhdx" ]; then echo "- \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format"; fi)
-          - \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used
+          - \`${{ steps.kernel-version.outputs.version }}/bzImage\`: Compiled kernel image
+          $(if [ -f "${{ steps.kernel-version.outputs.version }}/modules.vhdx" ] || [ -f "modules.vhdx" ]; then echo "- \`${{ steps.kernel-version.outputs.version }}/modules.vhdx\`: Kernel modules in VHDX format"; fi)
+          - \`${{ steps.kernel-version.outputs.version }}/config\`: Build configuration used
 
           ## Installation
 
@@ -353,7 +364,7 @@ jobs:
           Or download and extract the zip file manually to \`%USERPROFILE%\\wsl\\kernels\` and update your \`.wslconfig\`.
           EOF
 
-          # Create build info for the zip
+          # Create build info for the zip (kept at the root of the archive)
           cat > artifacts/build-info.txt << EOF
           Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           Kernel Version: ${{ steps.kernel-version.outputs.release }}
@@ -373,21 +384,21 @@ jobs:
           $(tail -n 20 .cache/ccache.log 2>/dev/null || echo "No debug log available")
           EOF
 
-          # List artifacts
+          # List artifacts and versioned directory
           ls -la artifacts/
+          ls -la "$VERSION_DIR" || true
 
-          # Create zip file with all assets
-          cd artifacts
-          zip -r "../wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" .
-          cd ..
+          # Create zip file with build-info.txt at root and versioned directory inside
+          zip_file="wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip"
+          (cd artifacts && zip -r "../${zip_file}" build-info.txt "${{ steps.kernel-version.outputs.version }}")
 
           # List what we created
           echo "==> Created zip file:"
-          ls -la wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip
+          ls -la "$zip_file"
           echo "==> Zip contents:"
-          unzip -l wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip
+          unzip -l "$zip_file"
           
-          echo "zip_file=wsl2-kernel-${{ steps.kernel-version.outputs.version }}.zip" >> $GITHUB_OUTPUT
+          echo "zip_file=${zip_file}" >> $GITHUB_OUTPUT
 
           # Cleanup to save space on the runner
           rm -rf artifacts/
@@ -452,11 +463,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Release Asset" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ steps.prepare-assets.outputs.zip_file }}\`: Complete kernel package containing:" >> $GITHUB_STEP_SUMMARY
-          echo "  - \`bzImage-${{ steps.kernel-version.outputs.version }}\`: Compiled kernel image" >> $GITHUB_STEP_SUMMARY
-          if [ -f "artifacts/modules-${{ steps.kernel-version.outputs.version }}.vhdx" ]; then
-            echo "  - \`modules-${{ steps.kernel-version.outputs.version }}.vhdx\`: Kernel modules in VHDX format" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`${{ steps.kernel-version.outputs.version }}/bzImage\`: Compiled kernel image" >> $GITHUB_STEP_SUMMARY
+          if [ -f "artifacts/${{ steps.kernel-version.outputs.version }}/modules.vhdx" ]; then
+            echo "  - \`${{ steps.kernel-version.outputs.version }}/modules.vhdx\`: Kernel modules in VHDX format" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "  - \`config-${{ steps.kernel-version.outputs.release }}\`: Build configuration used" >> $GITHUB_STEP_SUMMARY
+          echo "  - \`${{ steps.kernel-version.outputs.version }}/config\`: Build configuration used" >> $GITHUB_STEP_SUMMARY
           echo "  - \`build-info.txt\`: Build metadata" >> $GITHUB_STEP_SUMMARY
           echo "## Installation command" >> $GITHUB_STEP_SUMMARY
           echo '```powershell' >> $GITHUB_STEP_SUMMARY
