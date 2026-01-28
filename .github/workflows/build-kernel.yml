@@ -20,11 +20,33 @@ env:
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
+  check-local:
+    runs-on: self-hosted
+    continue-on-error: true
+    timeout-minutes: 1
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        run: echo "available=true" >> $GITHUB_OUTPUT
+
+  check-cloud:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        run: echo "available=true" >> $GITHUB_OUTPUT
+
   prepare:
-    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    needs: [check-local, check-cloud]
+    if: always() && (needs.check-local.result == 'success' || needs.check-cloud.result == 'success')
+    runs-on: ${{ github.event.inputs.runner || (needs.check-local.result == 'success' && 'self-hosted' || 'ubuntu-latest') }}
     outputs:
       matrix: ${{ steps.merge.outputs.matrix }}
       runner-cores: ${{ steps.runner-info.outputs.cores }}
+      selected-runner: ${{ github.event.inputs.runner || (needs.check-local.result == 'success' && 'self-hosted' || 'ubuntu-latest') }}
 
     steps:
       - name: Gather available branches from microsoft/WSL2-Linux-Kernel
@@ -112,7 +134,7 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    runs-on: ${{ needs.prepare.outputs.selected-runner }}
     container:
       image: ubuntu:24.04
       options: --privileged
