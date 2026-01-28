@@ -132,14 +132,51 @@ jobs:
           echo "Runner has $CORES CPU cores"
           echo "cores=$CORES" >> $GITHUB_OUTPUT
 
+      - name: Aggressive cleanup
+        run: |
+          # Remove Java (JDKs)
+          sudo rm -rf /usr/lib/jvm || true
+
+          # Remove .NET SDKs
+          sudo rm -rf /usr/share/dotnet || true
+
+          # Remove Swift toolchain
+          sudo rm -rf /usr/share/swift || true
+
+          # Remove Haskell (GHC)
+          sudo rm -rf /usr/local/.ghcup || true
+
+          # Remove Julia
+          sudo rm -rf /usr/local/julia* || true
+
+          # Remove Android SDKs
+          sudo rm -rf /usr/local/lib/android || true
+
+          # Remove Chromium (optional if not using for browser tests)
+          sudo rm -rf /usr/local/share/chromium || true
+
+          # Remove Microsoft/Edge and Google Chrome builds
+          sudo rm -rf /opt/microsoft /opt/google || true
+
+          # Remove Azure CLI
+          sudo rm -rf /opt/az || true
+
+          # Remove PowerShell
+          sudo rm -rf /usr/local/share/powershell || true
+
+          # Remove CodeQL and other toolcaches
+          sudo rm -rf /opt/hostedtoolcache || true
+
+          docker system prune -af || true
+          docker builder prune -af || true
+          df -h
+
   build:
     needs: prepare
     runs-on: ${{ needs.prepare.outputs.selected-runner }}
     container:
       image: ubuntu:24.04
       options: --privileged
-      volumes:
-        - /opt/hostedtoolcache:/opt/hostedtoolcache:z
 
     strategy:
       fail-fast: false
@@ -213,12 +250,6 @@ jobs:
           apt-get update
           apt-get install -y build-essential flex bison dwarves libssl-dev libelf-dev cpio qemu-utils ccache jq bc curl gh python3 zstd zip git git-lfs
 
-      - name: Remove /opt/hostedtoolcache contents from GitHub runner
-        if: github.event.inputs.runner == ''
-        run: |
-          find -mindepth 1 -maxdepth 1 /opt/hostedtoolcache -print -exec rm -rf {} + || true
-          echo "==> Removed /opt/hostedtoolcache contents to free up space"
-
       - name: Cache ccache
         if: steps.check-release.outputs.skip != 'true'
         uses: actions/cache@v4
@@ -252,10 +283,29 @@ jobs:
           echo "==> Starting kernel build with ${{ needs.prepare.outputs.runner-cores }} parallel threads"
 
           # Build kernel with parallel jobs and ccache
-          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.prepare.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc)
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.prepare.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc) || {
+              echo "==> Kernel build failed!"
+              echo "Current disk space usage:"
+              df -h
+              echo "Current directory space usage:"
+              du -shc $PWD/*
+              exit 1
+          }
+          time_kernel_built=$(date +%s)
+          echo "==> Kernel build succeeded! (took $((time_kernel_built - time_start)) seconds)"
 
+          echo "==> Installing modules..."
           # Install modules to local directory
-          make KCONFIG_CONFIG=${{ matrix.kconfig }} INSTALL_MOD_PATH="$PWD/modules" modules_install
+          make KCONFIG_CONFIG=${{ matrix.kconfig }} INSTALL_MOD_PATH="$PWD/modules" modules_install || {
+              echo "==> Module installation failed!"
+              echo "Current disk space usage:"
+              df -h
+              echo "Current directory space usage:"
+              du -shc $PWD/*
+              exit 1
+          }
+          time_modules_installed=$(date +%s)
+          echo "==> Module installation succeeded! (took $((time_modules_installed - time_kernel_built)) seconds)"
           time_end=$(date +%s)
           time_taken=$((time_end - time_start))
           echo "==> Kernel build completed in $((time_taken / 60)) minutes and $((time_taken % 60)) seconds"
@@ -318,7 +368,7 @@ jobs:
           chmod 644 modules.vhdx
 
           # Cleanup
-          rm -rf "$tmp_dir"
+          rm -rf "$tmp_dir" "$PWD/modules"
 
       - name: Prepare and zip release assets
         if: steps.check-release.outputs.skip != 'true'
