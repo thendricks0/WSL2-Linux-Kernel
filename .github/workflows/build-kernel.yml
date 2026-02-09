@@ -47,11 +47,24 @@ jobs:
               fi
 
               echo "==> Applying 5Mbps limit on $IFACE"
-              # Remove existing root qdisc to be clean
+              # Remove existing
               sudo tc qdisc del dev "$IFACE" root 2>/dev/null || true
+
+              # Use HTB + fq_codel. This is the industry standard for preventing bufferbloat.
+              # It rate-limits the link but ensures interactive traffic (SSH/Runner) gets priority
+              # over bulk uploads, preventing the "stuck" connection issues.
+              
+              # 1. Root HTB
               sudo tc qdisc add dev "$IFACE" root handle 1: htb default 10
-              sudo tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 1gbit
-              sudo tc class add dev "$IFACE" parent 1:1 classid 1:10 htb rate 5mbit ceil 5mbit
+              
+              # 2. Rate Limit Class
+              # burst=256k is critical for GSO/offload support (avoiding immediate drops)
+              sudo tc class add dev "$IFACE" parent 1: classid 1:10 htb rate 5mbit ceil 5mbit burst 256k cburst 256k
+              
+              # 3. Leaf qdisc: fq_codel (Fair Queueing with Controlled Delay)
+              # limit 2000: Provides deep buffer (~3MB) to absorb existing TCP flight (prevent drops)
+              # But fq_codel internals prevent this buffer from blocking control traffic.
+              sudo tc qdisc add dev "$IFACE" parent 1:10 fq_codel limit 2000 quantum 1514
           }
           
           # Function to remove limit
