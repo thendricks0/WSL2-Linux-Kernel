@@ -326,14 +326,18 @@ jobs:
           echo "==> Starting kernel build with ${{ needs.prepare.outputs.runner-cores }} parallel threads"
 
           # Build kernel with parallel jobs and ccache
-          make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$(echo "${{ needs.prepare.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc) || {
-              echo "==> Kernel build failed!"
-              echo "Current disk space usage:"
-              df -h
-              echo "Current directory space usage:"
-              du -shc $PWD/*
-              exit 1
-          }
+          JOBS=$(echo "${{ needs.prepare.outputs.runner-cores }} / ${{ vars.MATRIX_PARALLEL_JOBS || 2 }}" | bc)
+          if ! make KCONFIG_CONFIG=${{ matrix.kconfig }} -j$JOBS; then
+              echo "==> Kernel build failed with -j$JOBS, potential OOM. Retrying with -j1..."
+              make KCONFIG_CONFIG=${{ matrix.kconfig }} -j1 || {
+                  echo "==> Kernel build failed again!"
+                  echo "Current disk space usage:"
+                  df -h
+                  echo "Current directory space usage:"
+                  du -shc $PWD/*
+                  exit 1
+              }
+          fi
           time_kernel_built=$(date +%s)
           echo "==> Kernel build succeeded! (took $((time_kernel_built - time_start)) seconds)"
 
