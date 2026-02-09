@@ -1,4 +1,4 @@
-name: Build Kernel
+name: Build & Publish Kernels
 
 on:
   push:
@@ -22,6 +22,7 @@ env:
 jobs:
   check-local:
     runs-on: self-hosted
+    if: always()
     continue-on-error: true
     timeout-minutes: 1
     outputs:
@@ -32,6 +33,7 @@ jobs:
 
   check-cloud:
     runs-on: ubuntu-latest
+    if: always()
     continue-on-error: true
     outputs:
       available: ${{ steps.check.outputs.available }}
@@ -173,6 +175,7 @@ jobs:
 
   build:
     needs: prepare
+    if: always() && (needs.prepare.result == 'success')
     runs-on: ${{ needs.prepare.outputs.selected-runner }}
     container:
       image: ubuntu:24.04
