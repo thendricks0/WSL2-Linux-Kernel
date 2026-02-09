@@ -31,6 +31,46 @@ jobs:
       - id: check
         run: echo "available=true" >> $GITHUB_OUTPUT
 
+      - name: Configure Bandwidth Limit
+        run: |
+          current_day=$(date +%u)
+          current_hour=$(date +%H)
+          IFACE=$(ip route | awk '/default/ { print $5 }')
+          
+          echo "==> Interface: $IFACE"
+          
+          # Function to apply limit
+          apply_limit() {
+              if ! command -v tc >/dev/null 2>&1; then
+                  echo "==> installing tc (iproute2)"
+                  sudo apt-get update && sudo apt-get install -y iproute2
+              fi
+
+              echo "==> Applying 5Mbps limit on $IFACE"
+              # Remove existing root qdisc to be clean
+              sudo tc qdisc del dev "$IFACE" root 2>/dev/null || true
+              sudo tc qdisc add dev "$IFACE" root handle 1: htb default 10
+              sudo tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 1gbit
+              sudo tc class add dev "$IFACE" parent 1:1 classid 1:10 htb rate 5mbit ceil 5mbit
+          }
+          
+          # Function to remove limit
+          remove_limit() {
+              echo "==> Removing limits on $IFACE"
+              sudo tc qdisc del dev "$IFACE" root 2>/dev/null || true
+          }
+
+          if [ "$current_day" -ge 1 ] && [ "$current_day" -le 5 ] && [ "$current_hour" -ge 7 ] && [ "$current_hour" -lt 18 ]; then
+               echo "==> Work hours detected (Mon-Fri 07:00-18:00)."
+               apply_limit || {
+                   echo "==> Failed to apply bandwidth limit, setting runner as unavailable."
+                   echo "available=false" >> $GITHUB_OUTPUT
+               }
+          else
+               echo "==> Outside work hours."
+               remove_limit || echo "==> No limits to remove or failed to remove, ignoring."
+          fi
+
   check-cloud:
     runs-on: ubuntu-latest
     if: always()
