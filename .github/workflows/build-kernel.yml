@@ -472,6 +472,13 @@ jobs:
           # Copy kernel config into versioned directory
           cp -v ${{ matrix.kconfig }} "$VERSION_DIR/config"
 
+          # Free disk space: remove everything except artifacts/ and .cache/ (ccache)
+          echo "==> Disk usage before cleanup:"
+          df -h .
+          find . -maxdepth 1 ! -name '.' ! -name '.cache' ! -name 'artifacts' -exec rm -rf {} +
+          echo "==> Disk usage after cleanup:"
+          df -h .
+
           # Example wslconfig file
           cat > "artifacts/example.wslconfig" << EOF
           [wsl2]
