@@ -20,18 +20,61 @@ env:
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
-  check-local:
-    runs-on: self-hosted
-    if: always()
-    continue-on-error: true
-    timeout-minutes: 1
+  check-runner:
+    runs-on: ubuntu-latest
     outputs:
-      available: ${{ steps.check.outputs.available }}
+      runner: ${{ steps.pick.outputs.runner }}
     steps:
-      - id: check
-        run: echo "available=true" >> $GITHUB_OUTPUT
+      - name: Determine target runner
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
+          RUNNER_LABEL: "self-hosted"
+        run: |
+          # If a runner was explicitly specified via workflow_dispatch, use it
+          MANUAL_RUNNER="${{ github.event.inputs.runner }}"
+          if [ -n "$MANUAL_RUNNER" ]; then
+            echo "==> Manual runner override: $MANUAL_RUNNER"
+            echo "runner=$MANUAL_RUNNER" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
+          # Query the GitHub Runners API to check if any self-hosted runner is online
+          RESPONSE=$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runners" 2>&1) || {
+            echo "==> API call failed: $RESPONSE"
+            echo "==> Falling back to ubuntu-latest"
+            echo "runner=ubuntu-latest" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          # Check if any runner with the self-hosted label is online
+          ONLINE_COUNT=$(echo "$RESPONSE" | jq '[.runners[] | select(.status == "online")] | length')
+          echo "==> Online self-hosted runners: $ONLINE_COUNT"
+
+          if [ "$ONLINE_COUNT" -gt 0 ]; then
+            RUNNER_NAME=$(echo "$RESPONSE" | jq -r '[.runners[] | select(.status == "online")][0].name')
+            echo "==> Self-hosted runner '$RUNNER_NAME' is online, using self-hosted"
+            echo "runner=self-hosted" >> "$GITHUB_OUTPUT"
+          else
+            echo "==> No self-hosted runners online, falling back to ubuntu-latest"
+            echo "runner=ubuntu-latest" >> "$GITHUB_OUTPUT"
+          fi
+
+  prepare:
+    needs: [check-runner]
+    runs-on: ${{ needs.check-runner.outputs.runner }}
+    outputs:
+      matrix: ${{ steps.merge.outputs.matrix }}
+      runner-cores: ${{ steps.runner-info.outputs.cores }}
+      selected-runner: ${{ needs.check-runner.outputs.runner }}
+
+    steps:
       - name: Configure Bandwidth Limit
+        if: ${{ needs.check-runner.outputs.runner == 'self-hosted' }}
         run: |
           current_day=$(date +%u)
           current_hour=$(date +%H)
@@ -75,35 +118,12 @@ jobs:
 
           if [ "$current_day" -ge 1 ] && [ "$current_day" -le 5 ] && [ "$current_hour" -ge 7 ] && [ "$current_hour" -lt 18 ]; then
                echo "==> Work hours detected (Mon-Fri 07:00-18:00)."
-               apply_limit || {
-                   echo "==> Failed to apply bandwidth limit, setting runner as unavailable."
-                   echo "available=false" >> $GITHUB_OUTPUT
-               }
+               apply_limit || echo "==> Failed to apply bandwidth limit, continuing anyway."
           else
                echo "==> Outside work hours."
                remove_limit || echo "==> No limits to remove or failed to remove, ignoring."
           fi
 
-  check-cloud:
-    runs-on: ubuntu-latest
-    if: always()
-    continue-on-error: true
-    outputs:
-      available: ${{ steps.check.outputs.available }}
-    steps:
-      - id: check
-        run: echo "available=true" >> $GITHUB_OUTPUT
-
-  prepare:
-    needs: [check-local, check-cloud]
-    if: always() && (needs.check-local.result == 'success' || needs.check-cloud.result == 'success')
-    runs-on: ${{ github.event.inputs.runner || (needs.check-local.result == 'success' && 'self-hosted' || 'ubuntu-latest') }}
-    outputs:
-      matrix: ${{ steps.merge.outputs.matrix }}
-      runner-cores: ${{ steps.runner-info.outputs.cores }}
-      selected-runner: ${{ github.event.inputs.runner || (needs.check-local.result == 'success' && 'self-hosted' || 'ubuntu-latest') }}
-
-    steps:
       - name: Gather available branches from microsoft/WSL2-Linux-Kernel
         id: microsoft-branches
         run: |
