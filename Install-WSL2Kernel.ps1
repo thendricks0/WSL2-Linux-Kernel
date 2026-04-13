@@ -2,28 +2,28 @@
 
 <#
 .SYNOPSIS
-WSL2 Kernel Installer - Downloads and installs custom WSL2 kernels from GitHub Actions
+WSL2 Kernel Installer - Downloads and installs custom WSL2 kernels from GitHub Releases
 
 .DESCRIPTION
 This script automatically downloads the latest WSL2 kernel builds from the 
-thendricks0/WSL2-Linux-Kernel repository, presents them in a user-friendly menu,
+thendricks0/WSL2-Linux-Kernel repository releases, presents them in a user-friendly menu,
 and installs the selected kernel to the user's WSL configuration.
 
 Features:
-- Queries GitHub API for latest successful workflow runs
-- Downloads artifacts using nightly.link (no authentication required)
-- Extracts kernels to ~/wsl/kernels directory
+- Queries GitHub Releases API for available kernel builds
+- Downloads release assets (kernel zip packages) with optional authentication
+- Extracts kernels to ~/wsl/kernels/{version} directory
 - Updates ~/.wslconfig with kernel and modules configuration
 - Backup and restore functionality for existing configurations
 
 .PARAMETER Token
-Optional GitHub personal access token for authenticated downloads
+Optional GitHub personal access token for authenticated downloads (required for private repositories)
 
 .PARAMETER EnableDebug
 Enable verbose output for debugging
 
 .PARAMETER Version
-Specify the kernel version to install (e.g., '6.6'). If provided, the script will select the artifact whose name starts with the version string.
+Specify the kernel version to install (e.g., '6.6'). If provided, the script will select the release whose name starts with the version string.
 
 .EXAMPLE
 ./Install-WSL2Kernel.ps1
@@ -111,7 +111,7 @@ function Show-ArtifactMenu {
     for ($i = 0; $i -lt $Artifacts.Count; $i++) {
         $artifact = $Artifacts[$i]
         $sizeMB = [Math]::Round($artifact.size_in_bytes / (1024 * 1024), 2)
-        $createdDate = ([DateTime]::Parse($artifact.created_at)).ToString("yyyy-MM-dd HH:mm")
+        $createdDate = ([DateTime]$artifact.created_at).ToString("yyyy-MM-dd HH:mm")
         Write-Host "$($i + 1). " -NoNewline -ForegroundColor Yellow
         Write-Host "$($artifact.name)" -ForegroundColor White
         Write-Host "    Size: $sizeMB MB" -ForegroundColor Gray
@@ -467,12 +467,23 @@ function Get-LatestKernelAssets {
         $releasesUrl = "https://api.github.com/repos/$($script:Config.GitHubOwner)/$($script:Config.GitHubRepo)/releases"
         Write-Verbose "Requesting releases: $releasesUrl"
         
-        try {
-            $releases = Invoke-RestMethod -Uri $releasesUrl -Method Get -Headers $headers -ErrorAction Stop
-        }
-        catch {
-            throw "Failed to get releases: $($_.Exception.Message)"
-        }
+        # Paginate through all releases
+        $allReleases = @()
+        $page = 1
+        do {
+            $pageUrl = "${releasesUrl}?per_page=100&page=$page"
+            Write-Verbose "Requesting releases page $page"
+            try {
+                $pageReleases = Invoke-RestMethod -Uri $pageUrl -Method Get -Headers $headers -ErrorAction Stop
+            }
+            catch {
+                throw "Failed to get releases (page $page): $($_.Exception.Message)"
+            }
+            $allReleases += $pageReleases
+            $page++
+        } while ($pageReleases.Count -eq 100)
+        
+        $releases = $allReleases
         
         if (-not $releases -or $releases.Count -eq 0) {
             throw "No releases found in the repository"
@@ -531,6 +542,8 @@ function Get-LatestKernelAssets {
                 # Create a synthetic artifact object
                 $transformedAsset = [PSCustomObject]@{
                     name = "wsl2-kernel-$version"
+                    version = $version
+                    prerelease = $release.prerelease
                     size_in_bytes = $zipAsset.size
                     created_at = $release.published_at
                     download_url = $zipAsset.browser_download_url
@@ -551,12 +564,50 @@ function Get-LatestKernelAssets {
             throw "No kernel zip assets found in releases"
         }
         
-        # Sort by creation date (newest first)
-        $transformedAssets = $transformedAssets | Sort-Object { [DateTime]::Parse($_.created_at) } -Descending
-        
         Write-Host "Found $($transformedAssets.Count) kernel package(s) total" -ForegroundColor Green
         
-        return $transformedAssets
+        # Group by major.minor kernel line and keep only the latest stable per line
+        # Version format: major.minor.patch[.subpatch][-rcN]
+        $grouped = @{}
+        foreach ($asset in $transformedAssets) {
+            # Extract major.minor from version string (e.g., "6.18" from "6.18.22", "7.0" from "7.0.0")
+            if ($asset.version -match '^(\d+\.\d+)') {
+                $kernelLine = $Matches[1]
+            } else {
+                $kernelLine = "unknown"
+            }
+            
+            if (-not $grouped.ContainsKey($kernelLine)) {
+                $grouped[$kernelLine] = @()
+            }
+            $grouped[$kernelLine] += $asset
+        }
+        
+        # For each kernel line, pick the latest stable release (or latest pre-release if no stable exists)
+        $latestPerLine = @()
+        foreach ($line in $grouped.Keys) {
+            $lineAssets = $grouped[$line]
+            
+            # Prefer stable releases
+            $stableAssets = @($lineAssets | Where-Object { -not $_.prerelease })
+            
+            if ($stableAssets.Count -gt 0) {
+                # Sort stable by date descending, take the newest
+                $latest = $stableAssets | Sort-Object { [DateTime]$_.created_at } -Descending | Select-Object -First 1
+            } else {
+                # No stable release for this line — take the newest pre-release
+                $latest = $lineAssets | Sort-Object { [DateTime]$_.created_at } -Descending | Select-Object -First 1
+            }
+            
+            $latestPerLine += $latest
+        }
+        
+        # Sort by version descending (newest kernel line first)
+        $latestPerLine = $latestPerLine | Sort-Object { [System.Version]($_.version -replace '-.*$', '' -replace '^(\d+\.\d+)$', '$1.0') } -Descending
+        
+        Write-Host "Showing $($latestPerLine.Count) latest kernel(s) (one per kernel line)" -ForegroundColor Green
+        
+        return $latestPerLine
     }
     catch {
         Write-Error "Failed to get kernel assets: $($_.Exception.Message)"
@@ -593,16 +644,23 @@ function Install-SelectedKernel {
         
         Write-Host "Kernel package downloaded and extracted successfully" -ForegroundColor Green
         
-        # Find kernel and modules files
-        $kernelFiles = Get-ChildItem $extractedPath -File | Where-Object { $_.Name -match '^bzImage-' }
-        $modulesFiles = Get-ChildItem $extractedPath -File | Where-Object { $_.Name -match '^modules-.*\.vhdx$' }
-        
-        if (-not $kernelFiles -or $kernelFiles.Count -eq 0) {
-            throw "No kernel file (bzImage-*) found in extracted package"
+        # Find the versioned subdirectory (zip structure: {version}/bzImage, {version}/config, {version}/modules.vhdx)
+        $versionDirs = Get-ChildItem $extractedPath -Directory
+        if (-not $versionDirs -or $versionDirs.Count -eq 0) {
+            throw "No versioned subdirectory found in extracted package"
         }
         
-        $kernelFile = $kernelFiles[0]  # Take the first kernel file
-        $modulesFile = if ($modulesFiles.Count -gt 0) { $modulesFiles[0] } else { $null }
+        $versionDir = $versionDirs[0]
+        $kernelVersion = $versionDir.Name
+        Write-Verbose "Found versioned directory: $kernelVersion"
+        
+        # Find kernel and modules files inside the versioned directory
+        $kernelFile = Get-Item (Join-Path $versionDir.FullName "bzImage") -ErrorAction SilentlyContinue
+        $modulesFile = Get-Item (Join-Path $versionDir.FullName "modules.vhdx") -ErrorAction SilentlyContinue
+        
+        if (-not $kernelFile) {
+            throw "No kernel file (bzImage) found in extracted package under $kernelVersion/"
+        }
         
         Write-Host "Found kernel: $($kernelFile.Name)" -ForegroundColor Green
         if ($modulesFile) {
@@ -610,12 +668,7 @@ function Install-SelectedKernel {
         }
         
         # Create version-specific directory in kernels folder
-        if ($kernelFile.Name -match 'bzImage-(.+)') {
-            $kernelVersion = $matches[1]
-        } else {
-            $kernelVersion = "unknown-$(Get-Date -Format 'yyyyMMdd')"
-        }
-        $kernelInstallDir = $script:Config.WSLKernelsDir
+        $kernelInstallDir = Join-Path $script:Config.WSLKernelsDir $kernelVersion
         
         Write-Host "Installing to: $kernelInstallDir" -ForegroundColor Cyan
         
@@ -783,9 +836,7 @@ try {
         }
     }
     else {
-        # Reverse sort artifacts by name
-        $artifacts = $artifacts | Sort-Object -Property name -Descending
-        # Show menu and get user selection
+        # Show menu and get user selection (already sorted newest first)
         $selectedArtifact = Show-ArtifactMenu -Artifacts $artifacts -Title "Choose a WSL2 Kernel to Install"
         if (-not $selectedArtifact) {
             Write-Host "Installation cancelled by user." -ForegroundColor Yellow
