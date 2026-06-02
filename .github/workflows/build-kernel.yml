@@ -8,10 +8,10 @@ on:
     inputs:
       runner:
         description: 'Runner label to use for the build job'
-        required: false
-        default: ''
+        required: true
+        default: 'ubuntu-latest'
   schedule:
-    - cron: "0 1 * * *" # Every day at 01:00 am UTC
+    - cron: "0 5 * * *" # Every day at 5:00 am UTC
 
 env:
   CUSTOM_KERNEL_CONFIG: |
@@ -20,61 +20,15 @@ env:
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
-  check-runner:
-    runs-on: ubuntu-latest
-    outputs:
-      runner: ${{ steps.pick.outputs.runner }}
-    steps:
-      - name: Determine target runner
-        id: pick
-        env:
-          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
-          RUNNER_LABEL: "self-hosted"
-        run: |
-          # If a runner was explicitly specified via workflow_dispatch, use it
-          MANUAL_RUNNER="${{ github.event.inputs.runner }}"
-          if [ -n "$MANUAL_RUNNER" ]; then
-            echo "==> Manual runner override: $MANUAL_RUNNER"
-            echo "runner=$MANUAL_RUNNER" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Query the GitHub Runners API to check if any self-hosted runner is online
-          RESPONSE=$(curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runners" 2>&1) || {
-            echo "==> API call failed: $RESPONSE"
-            echo "==> Falling back to ubuntu-latest"
-            echo "runner=ubuntu-latest" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-
-          # Check if any runner with the self-hosted label is online
-          ONLINE_COUNT=$(echo "$RESPONSE" | jq '[.runners[] | select(.status == "online")] | length')
-          echo "==> Online self-hosted runners: $ONLINE_COUNT"
-
-          if [ "$ONLINE_COUNT" -gt 0 ]; then
-            RUNNER_NAME=$(echo "$RESPONSE" | jq -r '[.runners[] | select(.status == "online")][0].name')
-            echo "==> Self-hosted runner '$RUNNER_NAME' is online, using self-hosted"
-            echo "runner=self-hosted" >> "$GITHUB_OUTPUT"
-          else
-            echo "==> No self-hosted runners online, falling back to ubuntu-latest"
-            echo "runner=ubuntu-latest" >> "$GITHUB_OUTPUT"
-          fi
-
   prepare:
-    needs: [check-runner]
-    runs-on: ${{ needs.check-runner.outputs.runner }}
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.merge.outputs.matrix }}
       runner-cores: ${{ steps.runner-info.outputs.cores }}
-      selected-runner: ${{ needs.check-runner.outputs.runner }}
 
     steps:
       - name: Configure Bandwidth Limit
-        if: ${{ needs.check-runner.outputs.runner == 'self-hosted' }}
+        if: ${{ github.event.inputs.runner == 'self-hosted' }}
         run: |
           current_day=$(date +%u)
           current_hour=$(date +%H)
@@ -249,7 +203,7 @@ jobs:
   build:
     needs: prepare
     if: always() && (needs.prepare.result == 'success')
-    runs-on: ${{ needs.prepare.outputs.selected-runner }}
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
     container:
       image: ubuntu:24.04
       options: --privileged
